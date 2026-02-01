@@ -48,3 +48,8 @@ coverage
 .cache
 tmp
 temp
+
+# Local notes/scratch
+CLAUDE.md
+FUTURE_FIXES.md
+index.ts
