@@ -1,0 +1,3 @@
+{
+  "extends": "@fightclaw/config/tsconfig.base.json"
+}
