@@ -31,6 +31,7 @@ export type GameEndedEvent = {
 	winnerAgentId: string | null;
 	loserAgentId: string | null;
 	reason: string;
+	reasonCode: string;
 };
 
 export type NoEventsEvent = {
@@ -82,6 +83,7 @@ export const buildGameEndedEvent = (
 	winnerAgentId,
 	loserAgentId,
 	reason,
+	reasonCode: reason,
 });
 
 export const buildNoEventsEvent = (): NoEventsEvent => ({

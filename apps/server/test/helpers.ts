@@ -45,12 +45,14 @@ export const readSseUntil = async (
 
 	while (Date.now() < endAt && text.length < maxBytes) {
 		const remaining = Math.max(endAt - Date.now(), 0);
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
 		const result = await Promise.race([
 			reader.read(),
 			new Promise<{ timeout: true }>((resolve) => {
-				setTimeout(() => resolve({ timeout: true }), remaining);
+				timeoutId = setTimeout(() => resolve({ timeout: true }), remaining);
 			}),
 		]);
+		if (timeoutId !== null) clearTimeout(timeoutId);
 
 		if ("timeout" in result) break;
 		if (result.done) break;

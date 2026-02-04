@@ -55,6 +55,7 @@ type MoveResponse =
 			matchStatus?: "ended";
 			winnerAgentId?: string | null;
 			reason?: string;
+			reasonCode?: string;
 	  };
 
 type FinishPayload = {
@@ -74,6 +75,7 @@ type StreamWriter = WritableStreamDefaultWriter<Uint8Array>;
 
 const IDEMPOTENCY_PREFIX = "move:";
 const IDEMPOTENCY_INDEX_KEY = "idempotency:index";
+// Bound idempotency cache size to avoid unbounded DO storage growth.
 const IDEMPOTENCY_MAX = 200;
 const ELO_K = 32;
 const ELO_START = 1500;
@@ -205,6 +207,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 					matchStatus: "ended",
 					winnerAgentId: forfeited.winnerAgentId ?? null,
 					reason: "invalid_move_schema",
+					reasonCode: "invalid_move_schema",
 				} satisfies MoveResponse;
 				await this.storeIdempotency(
 					body.moveId,
@@ -257,6 +260,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 					matchStatus: "ended",
 					winnerAgentId: forfeited.winnerAgentId ?? null,
 					reason: "illegal_move",
+					reasonCode: "illegal_move",
 				} satisfies MoveResponse;
 				await this.storeIdempotency(
 					body.moveId,
@@ -282,6 +286,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 					matchStatus: "ended",
 					winnerAgentId: forfeited.winnerAgentId ?? null,
 					reason: "invalid_move",
+					reasonCode: "invalid_move",
 				} satisfies MoveResponse;
 				await this.storeIdempotency(
 					body.moveId,

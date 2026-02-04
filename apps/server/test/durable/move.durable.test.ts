@@ -116,10 +116,12 @@ it("forfeits on invalid move schema", async () => {
 		forfeited?: boolean;
 		matchStatus?: string;
 		reason?: string;
+		reasonCode?: string;
 	};
 	expect(json.forfeited).toBe(true);
 	expect(json.matchStatus).toBe("ended");
 	expect(json.reason).toBe("invalid_move_schema");
+	expect(json.reasonCode).toBe("invalid_move_schema");
 
 	const endRes = await SELF.fetch(
 		`https://example.com/v1/matches/${matchId}/state`,

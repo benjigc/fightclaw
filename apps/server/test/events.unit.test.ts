@@ -21,6 +21,7 @@ describe("event builders", () => {
 		const event = buildGameEndedEvent("match-1", "winner", "loser", "forfeit");
 		expect(event.eventVersion).toBe(1);
 		expect(event.event).toBe("game_ended");
+		expect(event.reasonCode).toBe(event.reason);
 		expect(EventSchema.safeParse(event).success).toBe(true);
 	});
 

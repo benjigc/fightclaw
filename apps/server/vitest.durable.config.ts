@@ -17,8 +17,11 @@ export default defineWorkersConfig(async () => {
 		test: {
 			include: ["test/**/*.durable.test.ts"],
 			setupFiles: ["./test/setup.ts"],
+			fileParallelism: false,
+			maxConcurrency: 1,
 			poolOptions: {
 				workers: {
+					singleWorker: true,
 					wrangler: { configPath: "./wrangler.toml" },
 					miniflare: {
 						compatibilityFlags: ["nodejs_compat"],
