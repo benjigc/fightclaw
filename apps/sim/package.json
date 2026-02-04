@@ -1,0 +1,21 @@
+{
+  "name": "@arena/sim",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "sim:single": "tsx src/cli.ts single --seed 1 --maxTurns 200 --verbose",
+    "sim:tourney": "tsx src/cli.ts tourney --games 200 --seed 1 --maxTurns 200",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@fightclaw/engine": "workspace:*",
+    "minimist": "^1.2.8",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.5.4",
+    "@types/node": "^22.13.1"
+  }
+}

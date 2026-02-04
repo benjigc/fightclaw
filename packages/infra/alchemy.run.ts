@@ -1,16 +1,11 @@
 import alchemy from "alchemy";
-import {
-  D1Database,
-  DurableObjectNamespace,
-  RateLimit,
-  Worker,
-} from "alchemy/cloudflare";
+import { D1Database, DurableObjectNamespace, RateLimit, Worker } from "alchemy/cloudflare";
 import { config } from "dotenv";
 
 config({ path: "./.env" });
 config({ path: "../../apps/server/.env" });
 
-const app = await alchemy("fightclaw", { profile: "BGCIV" });
+const app = await alchemy("fightclaw");
 
 const db = await D1Database("database", {
   migrationsDir: "../../packages/db/src/migrations",
@@ -18,10 +13,12 @@ const db = await D1Database("database", {
 
 const matchmaker = DurableObjectNamespace("matchmaker", {
   className: "MatchmakerDO",
+  sqlite: true,
 });
 
 const match = DurableObjectNamespace("match", {
   className: "MatchDO",
+  sqlite: true,
 });
 
 const moveSubmitLimit = RateLimit({
@@ -47,6 +44,8 @@ export const server = await Worker("server", {
   bindings: {
     DB: db,
     CORS_ORIGIN: alchemy.env.CORS_ORIGIN!,
+    API_KEY_PEPPER: alchemy.secret(process.env.API_KEY_PEPPER!),
+    ADMIN_KEY: alchemy.secret(process.env.ADMIN_KEY!),
     MATCHMAKER: matchmaker,
     MATCH: match,
     MOVE_SUBMIT_LIMIT: moveSubmitLimit,

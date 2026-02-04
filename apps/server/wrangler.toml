@@ -1,0 +1,21 @@
+name = "fightclaw-server"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fightclaw_test"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[durable_objects.bindings]]
+name = "MATCHMAKER"
+class_name = "MatchmakerDO"
+
+[[durable_objects.bindings]]
+name = "MATCH"
+class_name = "MatchDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["MatchmakerDO", "MatchDO"]
