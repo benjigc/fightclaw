@@ -1,6 +1,5 @@
 import alchemy from "alchemy";
-import { DurableObjectNamespace, Worker } from "alchemy/cloudflare";
-import { D1Database } from "alchemy/cloudflare";
+import { D1Database, DurableObjectNamespace, Worker } from "alchemy/cloudflare";
 import { config } from "dotenv";
 
 config({ path: "./.env" });
@@ -27,7 +26,8 @@ export const server = await Worker("server", {
   bindings: {
     DB: db,
     CORS_ORIGIN: alchemy.env.CORS_ORIGIN!,
-    DEV_AGENT_KEY: alchemy.env.DEV_AGENT_KEY!,
+    API_KEY_PEPPER: alchemy.secret(process.env.API_KEY_PEPPER!),
+    ADMIN_KEY: alchemy.secret(process.env.ADMIN_KEY!),
     MATCHMAKER: matchmaker,
     MATCH: match,
   },

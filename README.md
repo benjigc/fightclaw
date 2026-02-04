@@ -55,6 +55,21 @@ The API is running at [http://localhost:3000](http://localhost:3000).
 
 For more details, see the guide on [Deploying to Cloudflare with Alchemy](https://www.better-t-stack.dev/docs/guides/cloudflare-alchemy).
 
+## Local Dev / Deploying With Alchemy
+
+`packages/infra/alchemy.run.ts` reads secrets from `process.env` and passes them to the Worker via `alchemy.secret(...)`.
+
+Create a `.env` (not committed) using `.env.example` as a template, then export variables before running deploy.
+
+```bash
+# from repo root
+cp .env.example .env
+# edit .env with real values
+
+export $(cat .env | xargs)
+bun run deploy
+```
+
 ## Git Hooks and Formatting
 
 - Format and lint fix: `bun run check`
