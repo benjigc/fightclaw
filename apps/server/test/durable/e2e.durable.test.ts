@@ -61,7 +61,7 @@ it("plays to completion and exposes live/snapshot/stream", async () => {
 	controller.abort();
 	expect(sseText.length).toBeGreaterThan(0);
 
-	let finalState: ApiState | null = null;
+	let _finalState: ApiState | null = null;
 	for (let i = 0; i < 50; i++) {
 		const stateRes = await SELF.fetch(
 			`https://example.com/v1/matches/${matchId}/state`,
@@ -69,7 +69,7 @@ it("plays to completion and exposes live/snapshot/stream", async () => {
 		const payload = (await stateRes.json()) as { state: ApiState | null };
 		if (!payload.state) break;
 		if (payload.state.status === "ended") {
-			finalState = payload.state;
+			_finalState = payload.state;
 			break;
 		}
 

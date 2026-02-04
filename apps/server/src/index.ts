@@ -1,4 +1,3 @@
-import { MoveSchema } from "@fightclaw/engine";
 import { env } from "@fightclaw/env/server";
 import { type Context, Hono, type Next } from "hono";
 import { cors } from "hono/cors";
