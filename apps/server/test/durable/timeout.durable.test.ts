@@ -32,10 +32,15 @@ const setupMatch = async () => {
 it("forfeits on turn timeout via alarm", async () => {
 	const { matchId } = await setupMatch();
 
-	// @ts-expect-error MATCH is dynamic unless in your Env type
-	const id = env.MATCH.idFromName(matchId);
-	// @ts-expect-error MATCH is dynamic unless in your Env type
-	const stub = env.MATCH.get(id);
+	// Avoid pulling in the full generated Env binding type here (it can cause deep
+	// instantiation errors in tsc).
+	const match = (env as unknown as Record<string, unknown>).MATCH as
+		| DurableObjectNamespace
+		| undefined;
+	if (!match) throw new Error("MATCH durable object binding is not available.");
+
+	const id = match.idFromName(matchId);
+	const stub: DurableObjectStub = match.get(id);
 
 	await runInDurableObject(stub, async (instance: unknown, state) => {
 		const stored = await state.storage.get<Record<string, unknown>>("state");
@@ -76,10 +81,15 @@ it("forfeits on turn timeout via alarm", async () => {
 it("forfeits opportunistically on state fetch after timeout", async () => {
 	const { matchId } = await setupMatch();
 
-	// @ts-expect-error MATCH is dynamic unless in your Env type
-	const id = env.MATCH.idFromName(matchId);
-	// @ts-expect-error MATCH is dynamic unless in your Env type
-	const stub = env.MATCH.get(id);
+	// Avoid pulling in the full generated Env binding type here (it can cause deep
+	// instantiation errors in tsc).
+	const match = (env as unknown as Record<string, unknown>).MATCH as
+		| DurableObjectNamespace
+		| undefined;
+	if (!match) throw new Error("MATCH durable object binding is not available.");
+
+	const id = match.idFromName(matchId);
+	const stub: DurableObjectStub = match.get(id);
 
 	await runInDurableObject(stub, async (_instance: unknown, state) => {
 		const stored = await state.storage.get<Record<string, unknown>>("state");

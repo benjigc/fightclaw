@@ -29,14 +29,15 @@ const pollUntil = async <T>(
 };
 
 const pickMove = (moves: Move[]): Move => {
-	return (
+	const move =
 		moves.find((m) => m.action === "attack") ??
 		moves.find((m) => m.action === "recruit") ??
 		moves.find((m) => m.action === "move") ??
 		moves.find((m) => m.action === "fortify") ??
 		moves.find((m) => m.action === "pass") ??
-		moves[0]
-	);
+		moves[0];
+	if (!move) throw new Error("No legal moves available.");
+	return move;
 };
 
 type ApiState = { status: string; stateVersion: number; game: GameState };
@@ -79,7 +80,6 @@ it("plays to completion and exposes live/snapshot/stream", async () => {
 	controller.abort();
 	expect(sseText.length).toBeGreaterThan(0);
 
-	let _finalState: ApiState | null = null;
 	// Each turn has multiple actions; use a higher cap so this is not flaky.
 	for (let i = 0; i < 400; i++) {
 		const stateRes = await SELF.fetch(
@@ -87,10 +87,7 @@ it("plays to completion and exposes live/snapshot/stream", async () => {
 		);
 		const payload = (await stateRes.json()) as { state: ApiState | null };
 		if (!payload.state) break;
-		if (payload.state.status === "ended") {
-			_finalState = payload.state;
-			break;
-		}
+		if (payload.state.status === "ended") break;
 
 		const game = payload.state.game;
 		const activeId = currentPlayer(game);
