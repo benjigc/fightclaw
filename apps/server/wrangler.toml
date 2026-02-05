@@ -5,8 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "fightclaw_test"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_name = "fightclaw-database-bgciv"
+database_id = "7589e184-c8be-4094-9130-f44723859eef"
 
 [[durable_objects.bindings]]
 name = "MATCHMAKER"
@@ -18,4 +18,4 @@ class_name = "MatchDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["MatchmakerDO", "MatchDO"]
+new_sqlite_classes = ["MatchmakerDO", "MatchDO"]
