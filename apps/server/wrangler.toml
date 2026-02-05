@@ -2,11 +2,25 @@ name = "fightclaw-server"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+routes = [
+  { pattern = "api.fightclaw.com", custom_domain = true }
+]
 
 [vars]
 CORS_ORIGIN = "https://fightclaw.com,https://www.fightclaw.com,https://fightclaw.pages.dev"
+MATCHMAKING_ELO_RANGE = "200"
+TURN_TIMEOUT_SECONDS = "60"
 
 [[d1_databases]]
+binding = "DB"
+# IMPORTANT: do not point the default environment at production.
+# Set this to a dedicated dev database (recommended) or leave as a placeholder and override via env.
+database_name = "fightclaw-database-dev"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[env.production.d1_databases]]
 binding = "DB"
 database_name = "fightclaw-database-bgciv"
 database_id = "7589e184-c8be-4094-9130-f44723859eef"

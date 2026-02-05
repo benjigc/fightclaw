@@ -14,6 +14,8 @@ type AppBindings = {
 	API_KEY_PEPPER: string;
 	ADMIN_KEY: string;
 	INTERNAL_RUNNER_KEY?: string;
+	MATCHMAKING_ELO_RANGE?: string;
+	TURN_TIMEOUT_SECONDS?: string;
 	TEST_MODE?: string;
 	MATCHMAKER: DurableObjectNamespace;
 	MATCH: DurableObjectNamespace;
@@ -134,7 +136,7 @@ const corsMiddleware = cors({
 		if (!origin) return undefined;
 		return allowedOrigins.includes(origin) ? origin : undefined;
 	},
-	allowMethods: ["GET", "POST", "OPTIONS"],
+	allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
 });
 
 app.use("/*", async (c, next) => {
@@ -241,6 +243,50 @@ const submitMove = async (
 	});
 };
 
+const queueJoin = async (
+	c: Context<{ Bindings: AppBindings; Variables: AppVariables }>,
+) => {
+	const agentId = c.get("agentId");
+	if (!agentId) return c.text("Unauthorized", 401);
+
+	const stub = getMatchmakerStub(c);
+	return doFetchWithRetry(stub, "https://do/queue/join", {
+		method: "POST",
+		headers: {
+			"x-agent-id": agentId,
+		},
+	});
+};
+
+const queueStatus = async (
+	c: Context<{ Bindings: AppBindings; Variables: AppVariables }>,
+) => {
+	const agentId = c.get("agentId");
+	if (!agentId) return c.text("Unauthorized", 401);
+
+	const stub = getMatchmakerStub(c);
+	return doFetchWithRetry(stub, "https://do/queue/status", {
+		headers: {
+			"x-agent-id": agentId,
+		},
+	});
+};
+
+const queueLeave = async (
+	c: Context<{ Bindings: AppBindings; Variables: AppVariables }>,
+) => {
+	const agentId = c.get("agentId");
+	if (!agentId) return c.text("Unauthorized", 401);
+
+	const stub = getMatchmakerStub(c);
+	return doFetchWithRetry(stub, "https://do/queue/leave", {
+		method: "DELETE",
+		headers: {
+			"x-agent-id": agentId,
+		},
+	});
+};
+
 app.use("/v1/matches/*", async (c, next) => {
 	const path = c.req.path;
 	if (
@@ -258,6 +304,10 @@ app.use("/v1/events/*", async (c, next) => {
 	return requireAgent(c, next);
 });
 
+app.use("/v1/queue/*", async (c, next) => {
+	return requireAgent(c, next);
+});
+
 app.get("/", (c) => {
 	return c.text("OK");
 });
@@ -266,14 +316,28 @@ app.get("/health", (c) => {
 	return c.text("OK");
 });
 
+app.post("/v1/queue/join", async (c) => {
+	return queueJoin(c);
+});
+
+app.get("/v1/queue/status", async (c) => {
+	return queueStatus(c);
+});
+
+app.delete("/v1/queue/leave", async (c) => {
+	return queueLeave(c);
+});
+
 app.post("/v1/matches/queue", async (c) => {
-	const stub = getMatchmakerStub(c);
-	return doFetchWithRetry(stub, "https://do/queue", {
-		method: "POST",
-		headers: {
-			"x-agent-id": c.get("agentId"),
-		},
-	});
+	return queueJoin(c);
+});
+
+app.get("/v1/matches/queue/status", async (c) => {
+	return queueStatus(c);
+});
+
+app.post("/v1/matches/queue/leave", async (c) => {
+	return queueLeave(c);
 });
 
 app.get("/v1/events/wait", async (c) => {

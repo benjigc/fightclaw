@@ -1,4 +1,4 @@
-import { DurableObject, type DurableObjectState } from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 import {
 	applyMove,
 	type GameState,
@@ -21,6 +21,7 @@ type MatchEnv = {
 	DB: D1Database;
 	MATCHMAKER: DurableObjectNamespace;
 	INTERNAL_RUNNER_KEY?: string;
+	TURN_TIMEOUT_SECONDS?: string;
 	TEST_MODE?: string;
 };
 
@@ -29,6 +30,7 @@ type MatchState = {
 	status: "active" | "ended";
 	updatedAt: string;
 	createdAt: string;
+	turnExpiresAtMs?: number;
 	players: string[];
 	game: GameState;
 	lastMove: Move | null;
@@ -81,6 +83,7 @@ const IDEMPOTENCY_INDEX_KEY = "idempotency:index";
 const IDEMPOTENCY_MAX = 200;
 const MATCH_ID_KEY = "matchId";
 const SSE_WRITE_TIMEOUT_MS = 5000;
+const DEFAULT_TURN_TIMEOUT_SECONDS = 60;
 const ELO_K = 32;
 const ELO_START = 1500;
 
@@ -100,6 +103,80 @@ export class MatchDO extends DurableObject<MatchEnv> {
 	constructor(ctx: DurableObjectState, env: MatchEnv) {
 		super(ctx, env);
 		this.matchId = ctx.id.name ?? null;
+	}
+
+	async alarm(): Promise<void> {
+		const state = await this.ctx.storage.get<MatchState>("state");
+		if (!state) return;
+
+		const enforced = await this.maybeEnforceTurnTimeout(state);
+		if (enforced.status !== "active") return;
+
+		const expiresAt = enforced.turnExpiresAtMs;
+		if (
+			typeof expiresAt === "number" &&
+			Number.isFinite(expiresAt) &&
+			Date.now() < expiresAt
+		) {
+			await this.ctx.storage.setAlarm(expiresAt);
+		}
+	}
+
+	private turnTimeoutMs() {
+		const raw = this.env.TURN_TIMEOUT_SECONDS;
+		const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+		const seconds =
+			Number.isNaN(parsed) || parsed <= 0
+				? DEFAULT_TURN_TIMEOUT_SECONDS
+				: parsed;
+		return seconds * 1000;
+	}
+
+	private async maybeEnforceTurnTimeout(
+		state: MatchState,
+	): Promise<MatchState> {
+		if (state.status !== "active") return state;
+		let nextState = state;
+
+		const nowMs = Date.now();
+		const timeoutMs = this.turnTimeoutMs();
+
+		const expiresAt = nextState.turnExpiresAtMs;
+		if (
+			typeof expiresAt !== "number" ||
+			!Number.isFinite(expiresAt) ||
+			expiresAt <= 0
+		) {
+			const baseMs = Date.parse(nextState.updatedAt);
+			const startMs = Number.isFinite(baseMs) ? baseMs : nowMs;
+			const next: MatchState = {
+				...nextState,
+				turnExpiresAtMs: startMs + timeoutMs,
+			};
+			await this.ctx.storage.put("state", next);
+			await this.ctx.storage.setAlarm(
+				next.turnExpiresAtMs ?? nowMs + timeoutMs,
+			);
+			nextState = next;
+		}
+
+		const finalExpiresAt =
+			typeof nextState.turnExpiresAtMs === "number" &&
+			Number.isFinite(nextState.turnExpiresAtMs)
+				? nextState.turnExpiresAtMs
+				: null;
+		if (finalExpiresAt !== null && nowMs >= finalExpiresAt) {
+			const activeAgentId = getActiveAgentId(nextState.game);
+			if (activeAgentId) {
+				return await this.forfeitMatch(
+					nextState,
+					activeAgentId,
+					"turn_timeout",
+				);
+			}
+		}
+
+		return nextState;
 	}
 
 	async fetch(request: Request): Promise<Response> {
@@ -122,15 +199,20 @@ export class MatchDO extends DurableObject<MatchEnv> {
 
 			const existing = await this.ctx.storage.get<MatchState>("state");
 			if (existing) {
-				return Response.json({ ok: true, state: existing });
+				const enforced = await this.maybeEnforceTurnTimeout(existing);
+				return Response.json({ ok: true, state: enforced });
 			}
 
 			const seed = parsed.data.seed ?? Math.floor(Math.random() * 1_000_000);
 			const nextState = createInitialState(parsed.data.players, seed);
+			nextState.turnExpiresAtMs = Date.now() + this.turnTimeoutMs();
 			if (this.matchId) {
 				await this.ctx.storage.put(MATCH_ID_KEY, this.matchId);
 			}
 			await this.ctx.storage.put("state", nextState);
+			if (typeof nextState.turnExpiresAtMs === "number") {
+				await this.ctx.storage.setAlarm(nextState.turnExpiresAtMs);
+			}
 			await this.recordEvent(nextState, "match_started", {
 				players: nextState.players,
 				seed,
@@ -168,7 +250,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 				return Response.json(cached.body, { status: cached.status });
 			}
 
-			const state = await this.ctx.storage.get<MatchState>("state");
+			let state = await this.ctx.storage.get<MatchState>("state");
 			if (!state) {
 				const response = {
 					ok: false,
@@ -182,6 +264,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 				return Response.json(response, { status: 409 });
 			}
 
+			state = await this.maybeEnforceTurnTimeout(state);
 			if (state.status === "ended") {
 				const response = {
 					ok: false,
@@ -316,34 +399,47 @@ export class MatchDO extends DurableObject<MatchEnv> {
 				return Response.json(response, { status: 400 });
 			}
 
-			await this.ctx.storage.put("state", result.state);
+			let nextState = result.state;
+			if (nextState.status !== "active") {
+				await this.ctx.storage.deleteAlarm();
+			} else if (
+				nextState.game.turn !== state.game.turn ||
+				nextState.game.activePlayer !== state.game.activePlayer
+			) {
+				const baseMs = Date.parse(nextState.updatedAt);
+				const nowMs = Number.isFinite(baseMs) ? baseMs : Date.now();
+				const expiresAtMs = nowMs + this.turnTimeoutMs();
+				nextState = { ...nextState, turnExpiresAtMs: expiresAtMs };
+				await this.ctx.storage.setAlarm(expiresAtMs);
+			}
+			await this.ctx.storage.put("state", nextState);
 
-			const response = { ok: true, state: result.state } satisfies MoveResponse;
+			const response = { ok: true, state: nextState } satisfies MoveResponse;
 			await this.storeIdempotency(
 				body.moveId,
 				{ status: 200, body: response },
-				result.state.stateVersion,
+				nextState.stateVersion,
 			);
 
-			if (result.state.status === "ended") {
-				await this.finalizeMatch(result.state, "terminal");
+			if (nextState.status === "ended") {
+				await this.finalizeMatch(nextState, "terminal");
 			}
 
-			await this.recordEvent(result.state, "move_applied", {
+			await this.recordEvent(nextState, "move_applied", {
 				agentId,
 				move: moveParse.data,
-				stateVersion: result.state.stateVersion,
+				stateVersion: nextState.stateVersion,
 			});
 
-			await this.broadcastState(result.state);
-			this.broadcastYourTurn(result.state);
-			if (result.state.status === "ended") {
-				await this.recordEvent(result.state, "match_ended", {
-					winnerAgentId: result.state.winnerAgentId ?? null,
-					loserAgentId: result.state.loserAgentId ?? null,
+			await this.broadcastState(nextState);
+			this.broadcastYourTurn(nextState);
+			if (nextState.status === "ended") {
+				await this.recordEvent(nextState, "match_ended", {
+					winnerAgentId: nextState.winnerAgentId ?? null,
+					loserAgentId: nextState.loserAgentId ?? null,
 					reason: "terminal",
 				});
-				await this.broadcastGameEnd(result.state, "terminal");
+				await this.broadcastGameEnd(nextState, "terminal");
 			}
 
 			return Response.json(response);
@@ -396,7 +492,10 @@ export class MatchDO extends DurableObject<MatchEnv> {
 		}
 
 		if (request.method === "GET" && url.pathname === "/state") {
-			const state = await this.ctx.storage.get<MatchState>("state");
+			let state = await this.ctx.storage.get<MatchState>("state");
+			if (state) {
+				state = await this.maybeEnforceTurnTimeout(state);
+			}
 			return Response.json({ state: state ?? null });
 		}
 
@@ -405,9 +504,12 @@ export class MatchDO extends DurableObject<MatchEnv> {
 			if (!agentId) {
 				return new Response("Agent id is required.", { status: 400 });
 			}
-			const state = await this.ctx.storage.get<MatchState>("state");
+			let state = await this.ctx.storage.get<MatchState>("state");
 			if (state && !state.players.includes(agentId)) {
 				return new Response("Agent not part of match.", { status: 403 });
+			}
+			if (state) {
+				state = await this.maybeEnforceTurnTimeout(state);
 			}
 
 			const { readable, writer, close } = this.createStream();
@@ -672,6 +774,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 		reason: string,
 	) {
 		if (state.status === "ended") return state;
+		await this.ctx.storage.deleteAlarm();
 		const winnerAgentId = state.players.find(
 			(player) => player !== loserAgentId,
 		);
@@ -720,7 +823,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 			.first<{ ok: number }>();
 		const isFirstFinalization = !existingResult?.ok;
 
-		const result = await this.env.DB.prepare(
+		await this.env.DB.prepare(
 			"INSERT OR IGNORE INTO match_results(match_id, winner_agent_id, loser_agent_id, reason) VALUES (?, ?, ?, ?)",
 		)
 			.bind(
@@ -736,7 +839,12 @@ export class MatchDO extends DurableObject<MatchEnv> {
 		).bind(state.endedAt ?? null, state.winnerAgentId ?? null, matchId);
 
 		// Always mark the match row ended, even if finalization is repeated.
-		await this.env.DB.batch([updateMatch]);
+		// This must only run once per finalization attempt (do not include it again in later batches).
+		try {
+			await this.env.DB.batch([updateMatch]);
+		} catch (error) {
+			console.error("Failed to update match row during finalization", error);
+		}
 		if (!isFirstFinalization) {
 			await this.notifyFeaturedEnded(matchId);
 			return;
@@ -781,7 +889,6 @@ export class MatchDO extends DurableObject<MatchEnv> {
 
 		try {
 			await this.env.DB.batch([
-				updateMatch,
 				this.env.DB.prepare(
 					"UPDATE leaderboard SET rating=?, wins=wins+1, games_played=games_played+1, updated_at=datetime('now') WHERE agent_id=?",
 				).bind(winnerNext, state.winnerAgentId),
@@ -791,21 +898,15 @@ export class MatchDO extends DurableObject<MatchEnv> {
 			]);
 		} catch (error) {
 			console.error("Failed to update leaderboard", error);
-			// Still mark the match ended and rotate featured if possible.
-			try {
-				await this.env.DB.batch([updateMatch]);
-			} catch (inner) {
-				console.error(
-					"Failed to update match row after leaderboard failure",
-					inner,
-				);
-			}
 		}
 		await this.notifyFeaturedEnded(matchId);
 	}
 
 	private async handleSpectate(request: Request) {
-		const state = await this.ctx.storage.get<MatchState>("state");
+		let state = await this.ctx.storage.get<MatchState>("state");
+		if (state) {
+			state = await this.maybeEnforceTurnTimeout(state);
+		}
 		const { readable, writer, close } = this.createStream();
 		this.spectators.add(writer);
 		this.handleAbort(request, () => {

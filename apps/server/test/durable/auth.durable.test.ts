@@ -12,6 +12,21 @@ describe("auth", () => {
 		expect(res.status).toBe(401);
 	});
 
+	it("requires auth for queue join/status/leave", async () => {
+		const joinRes = await SELF.fetch("https://example.com/v1/queue/join", {
+			method: "POST",
+		});
+		expect(joinRes.status).toBe(401);
+
+		const statusRes = await SELF.fetch("https://example.com/v1/queue/status");
+		expect(statusRes.status).toBe(401);
+
+		const leaveRes = await SELF.fetch("https://example.com/v1/queue/leave", {
+			method: "DELETE",
+		});
+		expect(leaveRes.status).toBe(401);
+	});
+
 	it("requires auth for stream", async () => {
 		const res = await SELF.fetch(
 			`https://example.com/v1/matches/${matchId}/stream`,

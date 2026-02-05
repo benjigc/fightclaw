@@ -8,4 +8,18 @@ declare module "cloudflare:test" {
 		TEST_MODE?: string;
 		MATCHMAKER: DurableObjectNamespace;
 	}
+
+	export const env: ProvidedEnv;
+	export const SELF: Fetcher;
+	export const applyD1Migrations: (
+		db: D1Database,
+		migrations: D1Migration[],
+	) => Promise<void>;
+	export const runInDurableObject: (
+		stub: DurableObjectStub,
+		fn: (
+			instance: unknown,
+			state: DurableObjectState,
+		) => Response | Promise<Response>,
+	) => Promise<Response>;
 }

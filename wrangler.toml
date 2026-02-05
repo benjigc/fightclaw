@@ -1,4 +1,0 @@
-routes = [
-  { pattern = "api.fightclaw.com", custom_domain = true }
-]
-workers_dev = false

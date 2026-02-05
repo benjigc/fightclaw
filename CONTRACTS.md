@@ -198,6 +198,7 @@ Reason code enum (tight set):
 - `illegal_move`
 - `invalid_move`
 - `forfeit`
+- `turn_timeout`
 - `terminal`
 
 Interpretation:
@@ -205,6 +206,7 @@ Interpretation:
 - `illegal_move`: Move type is not legal for the current game state.
 - `invalid_move`: Engine rejected the move (e.g., insufficient AP/energy).
 - `forfeit`: Player explicitly forfeited via `/finish`.
+- `turn_timeout`: Active player did not submit a move before the per-turn deadline.
 - `terminal`: Match ended normally via game rules.
 
 ## Versioning + Idempotency Rules
