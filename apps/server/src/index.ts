@@ -14,6 +14,7 @@ type AppBindings = {
 	API_KEY_PEPPER: string;
 	ADMIN_KEY: string;
 	INTERNAL_RUNNER_KEY?: string;
+	TEST_MODE?: string;
 	MATCHMAKER: DurableObjectNamespace;
 	MATCH: DurableObjectNamespace;
 	MOVE_SUBMIT_LIMIT?: RateLimitBinding;
@@ -91,6 +92,32 @@ const parseJson = async (c: { req: { json: () => Promise<unknown> } }) => {
 		return { ok: true as const, data: await c.req.json() };
 	} catch {
 		return { ok: false as const, data: null };
+	}
+};
+
+const isDurableObjectResetError = (error: unknown) => {
+	if (!error || typeof error !== "object") return false;
+	const anyErr = error as { message?: unknown; durableObjectReset?: unknown };
+	if (anyErr.durableObjectReset === true) return true;
+	const message = typeof anyErr.message === "string" ? anyErr.message : "";
+	return message.includes("invalidating this Durable Object");
+};
+
+const doFetchWithRetry = async (
+	stub: { fetch: (input: string, init?: RequestInit) => Promise<Response> },
+	input: string,
+	init?: RequestInit,
+	retries = 2,
+) => {
+	let attempt = 0;
+	for (;;) {
+		try {
+			return await stub.fetch(input, init);
+		} catch (error) {
+			if (attempt >= retries || !isDurableObjectResetError(error)) throw error;
+			attempt += 1;
+			await new Promise((resolve) => setTimeout(resolve, 10 * attempt));
+		}
 	}
 };
 
@@ -241,7 +268,7 @@ app.get("/health", (c) => {
 
 app.post("/v1/matches/queue", async (c) => {
 	const stub = getMatchmakerStub(c);
-	return stub.fetch("https://do/queue", {
+	return doFetchWithRetry(stub, "https://do/queue", {
 		method: "POST",
 		headers: {
 			"x-agent-id": c.get("agentId"),
@@ -253,7 +280,7 @@ app.get("/v1/events/wait", async (c) => {
 	const stub = getMatchmakerStub(c);
 	const timeout = c.req.query("timeout");
 	const qs = timeout ? `?timeout=${encodeURIComponent(timeout)}` : "";
-	return stub.fetch(`https://do/events/wait${qs}`, {
+	return doFetchWithRetry(stub, `https://do/events/wait${qs}`, {
 		headers: {
 			"x-agent-id": c.get("agentId"),
 		},
@@ -262,7 +289,7 @@ app.get("/v1/events/wait", async (c) => {
 
 app.get("/v1/featured", async (c) => {
 	const stub = getMatchmakerStub(c);
-	return stub.fetch("https://do/featured");
+	return doFetchWithRetry(stub, "https://do/featured");
 });
 
 app.post("/v1/matches/:id/move", async (c) => {
@@ -275,6 +302,32 @@ app.post("/v1/internal/matches/:id/move", async (c) => {
 	const runner = getRunnerAgentId(c);
 	if (!runner.ok) return runner.response;
 	return submitMove(c, runner.agentId);
+});
+
+app.post("/v1/internal/__test__/reset", async (c) => {
+	if (!c.env.TEST_MODE) return c.text("Not found", 404);
+	const expected = c.env.INTERNAL_RUNNER_KEY;
+	if (!expected) return c.text("Internal auth not configured.", 503);
+	const provided = c.req.header("x-runner-key");
+	if (!provided || provided !== expected) return c.text("Forbidden", 403);
+
+	for (let attempt = 1; attempt <= 10; attempt += 1) {
+		try {
+			const stub = getMatchmakerStub(c);
+			const resp = await stub.fetch("https://do/__test__/reset", {
+				method: "POST",
+				headers: {
+					"x-runner-key": expected,
+				},
+			});
+			if (resp.ok) return c.json({ ok: true });
+		} catch (error) {
+			if (!isDurableObjectResetError(error)) throw error;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
+	}
+
+	return c.json({ ok: false, error: "Reset unavailable." }, 503);
 });
 
 app.post("/v1/matches/:id/finish", async (c) => {
@@ -394,7 +447,7 @@ app.get("/v1/leaderboard", async (c) => {
 
 app.get("/v1/live", async (c) => {
 	const stub = getMatchmakerStub(c);
-	return stub.fetch("https://do/live");
+	return doFetchWithRetry(stub, "https://do/live");
 });
 
 export { MatchDO } from "./do/MatchDO";

@@ -711,6 +711,15 @@ export class MatchDO extends DurableObject<MatchEnv> {
 			return;
 		}
 
+		// D1 `.run().changes` has been observed to be unreliable under some test runners.
+		// Use an explicit existence check to ensure we don't double-apply leaderboard updates.
+		const existingResult = await this.env.DB.prepare(
+			"SELECT 1 as ok FROM match_results WHERE match_id = ?",
+		)
+			.bind(matchId)
+			.first<{ ok: number }>();
+		const isFirstFinalization = !existingResult?.ok;
+
 		const result = await this.env.DB.prepare(
 			"INSERT OR IGNORE INTO match_results(match_id, winner_agent_id, loser_agent_id, reason) VALUES (?, ?, ?, ?)",
 		)
@@ -726,25 +735,30 @@ export class MatchDO extends DurableObject<MatchEnv> {
 			"UPDATE matches SET status='ended', ended_at=?, winner_agent_id=? WHERE id=? AND ended_at IS NULL",
 		).bind(state.endedAt ?? null, state.winnerAgentId ?? null, matchId);
 
-		if (!result.changes) {
-			await this.env.DB.batch([updateMatch]);
-			return;
-		}
-
-		if (!state.winnerAgentId || !state.loserAgentId) {
-			await this.env.DB.batch([updateMatch]);
+		// Always mark the match row ended, even if finalization is repeated.
+		await this.env.DB.batch([updateMatch]);
+		if (!isFirstFinalization) {
 			await this.notifyFeaturedEnded(matchId);
 			return;
 		}
 
-		await this.env.DB.batch([
-			this.env.DB.prepare(
-				"INSERT OR IGNORE INTO leaderboard(agent_id, rating, wins, losses, games_played) VALUES (?, ?, 0, 0, 0)",
-			).bind(state.winnerAgentId, ELO_START),
-			this.env.DB.prepare(
-				"INSERT OR IGNORE INTO leaderboard(agent_id, rating, wins, losses, games_played) VALUES (?, ?, 0, 0, 0)",
-			).bind(state.loserAgentId, ELO_START),
-		]);
+		if (!state.winnerAgentId || !state.loserAgentId) {
+			await this.notifyFeaturedEnded(matchId);
+			return;
+		}
+
+		try {
+			await this.env.DB.batch([
+				this.env.DB.prepare(
+					"INSERT OR IGNORE INTO leaderboard(agent_id, rating, wins, losses, games_played) VALUES (?, ?, 0, 0, 0)",
+				).bind(state.winnerAgentId, ELO_START),
+				this.env.DB.prepare(
+					"INSERT OR IGNORE INTO leaderboard(agent_id, rating, wins, losses, games_played) VALUES (?, ?, 0, 0, 0)",
+				).bind(state.loserAgentId, ELO_START),
+			]);
+		} catch (error) {
+			console.error("Failed to ensure leaderboard entries", error);
+		}
 
 		const winnerRow = await this.env.DB.prepare(
 			"SELECT rating FROM leaderboard WHERE agent_id = ?",
@@ -765,15 +779,28 @@ export class MatchDO extends DurableObject<MatchEnv> {
 
 		const { winnerNext, loserNext } = calculateElo(winnerRating, loserRating);
 
-		await this.env.DB.batch([
-			updateMatch,
-			this.env.DB.prepare(
-				"UPDATE leaderboard SET rating=?, wins=wins+1, games_played=games_played+1, updated_at=datetime('now') WHERE agent_id=?",
-			).bind(winnerNext, state.winnerAgentId),
-			this.env.DB.prepare(
-				"UPDATE leaderboard SET rating=?, losses=losses+1, games_played=games_played+1, updated_at=datetime('now') WHERE agent_id=?",
-			).bind(loserNext, state.loserAgentId),
-		]);
+		try {
+			await this.env.DB.batch([
+				updateMatch,
+				this.env.DB.prepare(
+					"UPDATE leaderboard SET rating=?, wins=wins+1, games_played=games_played+1, updated_at=datetime('now') WHERE agent_id=?",
+				).bind(winnerNext, state.winnerAgentId),
+				this.env.DB.prepare(
+					"UPDATE leaderboard SET rating=?, losses=losses+1, games_played=games_played+1, updated_at=datetime('now') WHERE agent_id=?",
+				).bind(loserNext, state.loserAgentId),
+			]);
+		} catch (error) {
+			console.error("Failed to update leaderboard", error);
+			// Still mark the match ended and rotate featured if possible.
+			try {
+				await this.env.DB.batch([updateMatch]);
+			} catch (inner) {
+				console.error(
+					"Failed to update match row after leaderboard failure",
+					inner,
+				);
+			}
+		}
 		await this.notifyFeaturedEnded(matchId);
 	}
 

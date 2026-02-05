@@ -21,6 +21,7 @@ type MatchmakerEnv = {
 	DB: D1Database;
 	MATCH: DurableObjectNamespace;
 	INTERNAL_RUNNER_KEY?: string;
+	TEST_MODE?: string;
 };
 
 type QueueResponse = { matchId: string; status: "waiting" | "ready" };
@@ -36,8 +37,47 @@ type FeaturedCache = FeaturedSnapshot & { checkedAt: number };
 export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 	private waiters = new Map<string, Set<(event: MatchmakerEvent) => void>>();
 
+	private isDurableObjectResetError(error: unknown) {
+		if (!error || typeof error !== "object") return false;
+		const anyErr = error as { message?: unknown; durableObjectReset?: unknown };
+		if (anyErr.durableObjectReset === true) return true;
+		const message = typeof anyErr.message === "string" ? anyErr.message : "";
+		return message.includes("invalidating this Durable Object");
+	}
+
+	private async doFetchWithRetry(
+		stub: { fetch: (input: string, init?: RequestInit) => Promise<Response> },
+		input: string,
+		init?: RequestInit,
+		retries = 2,
+	) {
+		let attempt = 0;
+		for (;;) {
+			try {
+				return await stub.fetch(input, init);
+			} catch (error) {
+				if (attempt >= retries || !this.isDurableObjectResetError(error)) {
+					throw error;
+				}
+				attempt += 1;
+				await new Promise((resolve) => setTimeout(resolve, 10 * attempt));
+			}
+		}
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
+
+		if (request.method === "POST" && url.pathname === "/__test__/reset") {
+			if (!this.env.TEST_MODE) {
+				return Response.json({ error: "Not found." }, { status: 404 });
+			}
+			const auth = this.requireRunnerKey(request);
+			if (!auth.ok) return auth.response;
+			await this.ctx.storage.deleteAll();
+			this.waiters.clear();
+			return Response.json({ ok: true });
+		}
 
 		if (request.method === "POST" && url.pathname === "/queue") {
 			const agentId = request.headers.get("x-agent-id");
@@ -69,7 +109,7 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 				const players = [pendingAgentId, agentId];
 				const id = this.env.MATCH.idFromName(pendingMatchId);
 				const stub = this.env.MATCH.get(id);
-				await stub.fetch("https://do/init", {
+				await this.doFetchWithRetry(stub, "https://do/init", {
 					method: "POST",
 					body: JSON.stringify({
 						players,
@@ -189,7 +229,7 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 
 			const id = this.env.MATCH.idFromName(snapshot.matchId);
 			const stub = this.env.MATCH.get(id);
-			const resp = await stub.fetch("https://do/state");
+			const resp = await this.doFetchWithRetry(stub, "https://do/state");
 			if (!resp.ok) {
 				return Response.json({ matchId: snapshot.matchId, state: null });
 			}
@@ -432,7 +472,7 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 		try {
 			const id = this.env.MATCH.idFromName(matchId);
 			const stub = this.env.MATCH.get(id);
-			const resp = await stub.fetch("https://do/state");
+			const resp = await this.doFetchWithRetry(stub, "https://do/state");
 			if (!resp.ok) return false;
 			const payload = (await resp.json()) as { state?: unknown };
 			return Boolean(payload?.state);
