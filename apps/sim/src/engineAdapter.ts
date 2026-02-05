@@ -5,38 +5,38 @@
  * functions into this shape.
  */
 
-import type { AgentId, GameState, Move } from "./types";
 import {
-  initialState,
-  currentPlayer,
-  isTerminal,
-  winner,
-  listLegalMoves,
-  applyMove,
+	applyMove,
+	createInitialState,
+	currentPlayer,
+	isTerminal,
+	listLegalMoves,
+	winner,
 } from "@fightclaw/engine";
+import type { AgentId, MatchState, Move } from "./types";
 
 export const Engine = {
-  initialState(seed: number, players: AgentId[]): GameState {
-    return initialState(seed, players);
-  },
+	createInitialState(seed: number, players: AgentId[]): MatchState {
+		return createInitialState(seed, undefined, players);
+	},
 
-  currentPlayer(state: GameState): AgentId {
-    return currentPlayer(state);
-  },
+	currentPlayer(state: MatchState): AgentId {
+		return currentPlayer(state);
+	},
 
-  isTerminal(state: GameState): boolean {
-    return isTerminal(state);
-  },
+	isTerminal(state: MatchState) {
+		return isTerminal(state);
+	},
 
-  winner(state: GameState): AgentId | null {
-    return winner(state);
-  },
+	winner(state: MatchState): AgentId | null {
+		return winner(state);
+	},
 
-  listLegalMoves(state: GameState): Move[] {
-    return listLegalMoves(state);
-  },
+	listLegalMoves(state: MatchState): Move[] {
+		return listLegalMoves(state);
+	},
 
-  applyMove(state: GameState, move: Move): GameState {
-    return applyMove(state, move);
-  },
+	applyMove(state: MatchState, move: Move) {
+		return applyMove(state, move);
+	},
 };
