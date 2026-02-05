@@ -30,7 +30,7 @@ describe("auth", () => {
 				body: JSON.stringify({
 					moveId: "test",
 					expectedVersion: 0,
-					move: { type: "gather" },
+					move: { action: "pass" },
 				}),
 			},
 		);
@@ -57,6 +57,19 @@ describe("auth", () => {
 		);
 		expect(spectateRes.status).toBe(200);
 		await readSseText(spectateRes);
+		controller.abort();
+	});
+
+	it("allows public events stream", async () => {
+		const controller = new AbortController();
+		const eventsRes = await SELF.fetch(
+			`https://example.com/v1/matches/${matchId}/events`,
+			{
+				signal: controller.signal,
+			},
+		);
+		expect(eventsRes.status).toBe(200);
+		await readSseText(eventsRes);
 		controller.abort();
 	});
 });

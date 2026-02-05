@@ -1,43 +1,17 @@
-import type { GameState } from "@fightclaw/engine";
+import type { SpectatorEvent } from "@fightclaw/engine";
 
 export const EVENT_VERSION = 1 as const;
 
-export type MatchFoundEvent = {
-	eventVersion: 1;
-	event: "match_found";
-	matchId: string;
-	opponentId: string;
-};
+type EventOf<E extends SpectatorEvent["event"]> = Extract<
+	SpectatorEvent,
+	{ event: E }
+>;
 
-export type YourTurnEvent = {
-	eventVersion: 1;
-	event: "your_turn";
-	matchId: string;
-	agentId: string;
-	stateVersion: number;
-};
-
-export type StateEvent = {
-	eventVersion: 1;
-	event: "state";
-	matchId: string | null;
-	state: GameState;
-};
-
-export type GameEndedEvent = {
-	eventVersion: 1;
-	event: "game_ended";
-	matchId: string | null;
-	winnerAgentId: string | null;
-	loserAgentId: string | null;
-	reason: string;
-	reasonCode: string;
-};
-
-export type NoEventsEvent = {
-	eventVersion: 1;
-	event: "no_events";
-};
+export type MatchFoundEvent = EventOf<"match_found">;
+export type YourTurnEvent = EventOf<"your_turn">;
+export type StateEvent = EventOf<"state">;
+export type GameEndedEvent = EventOf<"game_ended">;
+export type NoEventsEvent = EventOf<"no_events">;
 
 export const buildMatchFoundEvent = (
 	matchId: string,
@@ -50,20 +24,18 @@ export const buildMatchFoundEvent = (
 });
 
 export const buildYourTurnEvent = (
-	matchId: string | null,
-	agentId: string,
+	matchId: string,
 	stateVersion: number,
 ): YourTurnEvent => ({
 	eventVersion: EVENT_VERSION,
 	event: "your_turn",
-	matchId: matchId ?? "",
-	agentId,
+	matchId,
 	stateVersion,
 });
 
 export const buildStateEvent = (
-	matchId: string | null,
-	state: GameState,
+	matchId: string,
+	state: StateEvent["state"],
 ): StateEvent => ({
 	eventVersion: EVENT_VERSION,
 	event: "state",
@@ -72,9 +44,9 @@ export const buildStateEvent = (
 });
 
 export const buildGameEndedEvent = (
-	matchId: string | null,
-	winnerAgentId: string | null,
-	loserAgentId: string | null,
+	matchId: string,
+	winnerAgentId: GameEndedEvent["winnerAgentId"],
+	loserAgentId: GameEndedEvent["loserAgentId"],
 	reason: string,
 ): GameEndedEvent => ({
 	eventVersion: EVENT_VERSION,

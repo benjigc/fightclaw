@@ -111,3 +111,5 @@ Durable test notes:
 - The `test:durable` lane is expected to occasionally fail with "isolated storage stack frame" errors from the Workers test runner. This is a known limitation; keep the suite runnable, but don’t gate default CI on it.
 - To run the durable suite: `pnpm run test:durable`
 - Expected current failure signature: "Failed to pop isolated storage stack frame" / "Isolated storage failed" coming from `@cloudflare/vitest-pool-workers` (not app assertions).
+- Endgame persistence is gated in the normal lane via `apps/server/test/endgame-persistence.test.ts`.
+- Durable lane is best-effort and contains known flaky tests (see `apps/server/test/durable/endgame.durable.test.ts` for details).

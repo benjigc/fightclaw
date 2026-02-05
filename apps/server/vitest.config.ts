@@ -26,6 +26,8 @@ export default defineWorkersConfig(async () => {
 						bindings: {
 							API_KEY_PEPPER: "test-pepper",
 							ADMIN_KEY: "test-admin",
+							INTERNAL_RUNNER_KEY: "test-runner",
+							TEST_MODE: "true",
 							CORS_ORIGIN: "",
 							TEST_MIGRATIONS: migrations,
 						},

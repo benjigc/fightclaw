@@ -13,6 +13,7 @@ type AppBindings = {
 	CORS_ORIGIN: string;
 	API_KEY_PEPPER: string;
 	ADMIN_KEY: string;
+	INTERNAL_RUNNER_KEY?: string;
 	MATCHMAKER: DurableObjectNamespace;
 	MATCH: DurableObjectNamespace;
 	MOVE_SUBMIT_LIMIT?: RateLimitBinding;
@@ -101,16 +102,22 @@ const sha256Hex = async (input: string) => {
 		.join("");
 };
 
-app.use(
-	"/*",
-	cors({
-		origin: (origin) => {
-			if (!origin) return undefined;
-			return allowedOrigins.includes(origin) ? origin : undefined;
-		},
-		allowMethods: ["GET", "POST", "OPTIONS"],
-	}),
-);
+const corsMiddleware = cors({
+	origin: (origin) => {
+		if (!origin) return undefined;
+		return allowedOrigins.includes(origin) ? origin : undefined;
+	},
+	allowMethods: ["GET", "POST", "OPTIONS"],
+});
+
+app.use("/*", async (c, next) => {
+	if (c.req.path.startsWith("/v1/internal/")) {
+		return next();
+	}
+	return corsMiddleware(c, next);
+});
+
+app.options("/v1/internal/*", (c) => c.text("Forbidden", 403));
 
 app.use("/*", async (c, next) => {
 	const isRead = readMethods.has(c.req.method);
@@ -145,11 +152,75 @@ const requireAgent = async (
 	return next();
 };
 
+const getRunnerAgentId = (
+	c: Context<{ Bindings: AppBindings; Variables: AppVariables }>,
+) => {
+	const expected = c.env.INTERNAL_RUNNER_KEY;
+	if (!expected) {
+		return {
+			ok: false as const,
+			response: c.json(
+				{
+					error: "Internal auth not configured.",
+					code: "internal_auth_not_configured",
+				},
+				503,
+			),
+		};
+	}
+	const provided = c.req.header("x-runner-key");
+	if (!provided || provided !== expected) {
+		return { ok: false as const, response: c.text("Forbidden", 403) };
+	}
+	const agentId = c.req.header("x-agent-id");
+	if (!agentId) {
+		return {
+			ok: false as const,
+			response: c.text("Agent id is required.", 400),
+		};
+	}
+	return { ok: true as const, agentId };
+};
+
+const submitMove = async (
+	c: Context<{ Bindings: AppBindings; Variables: AppVariables }>,
+	agentId: string,
+) => {
+	const matchId = c.req.param("id");
+	const matchIdResult = matchIdSchema.safeParse(matchId);
+	if (!matchIdResult.success) {
+		return c.json({ ok: false, error: "Match id must be a UUID." }, 400);
+	}
+
+	const jsonResult = await parseJson(c);
+	if (!jsonResult.ok) {
+		return c.json({ ok: false, error: "Invalid JSON body." }, 400);
+	}
+
+	const payloadResult = movePayloadSchema.safeParse(jsonResult.data);
+	if (!payloadResult.success) {
+		return c.json({ ok: false, error: "Invalid move payload." }, 400);
+	}
+
+	const stub = getMatchStub(c, matchIdResult.data);
+	return stub.fetch("https://do/move", {
+		method: "POST",
+		body: JSON.stringify(payloadResult.data),
+		headers: {
+			"content-type": "application/json",
+			"x-agent-id": agentId,
+			"x-match-id": matchIdResult.data,
+		},
+	});
+};
+
 app.use("/v1/matches/*", async (c, next) => {
 	const path = c.req.path;
 	if (
 		c.req.method === "GET" &&
-		(path.endsWith("/state") || path.endsWith("/spectate"))
+		(path.endsWith("/state") ||
+			path.endsWith("/spectate") ||
+			path.endsWith("/events"))
 	) {
 		return next();
 	}
@@ -189,33 +260,21 @@ app.get("/v1/events/wait", async (c) => {
 	});
 });
 
+app.get("/v1/featured", async (c) => {
+	const stub = getMatchmakerStub(c);
+	return stub.fetch("https://do/featured");
+});
+
 app.post("/v1/matches/:id/move", async (c) => {
-	const matchId = c.req.param("id");
-	const matchIdResult = matchIdSchema.safeParse(matchId);
-	if (!matchIdResult.success) {
-		return c.json({ ok: false, error: "Match id must be a UUID." }, 400);
-	}
+	const agentId = c.get("agentId");
+	if (!agentId) return c.text("Unauthorized", 401);
+	return submitMove(c, agentId);
+});
 
-	const jsonResult = await parseJson(c);
-	if (!jsonResult.ok) {
-		return c.json({ ok: false, error: "Invalid JSON body." }, 400);
-	}
-
-	const payloadResult = movePayloadSchema.safeParse(jsonResult.data);
-	if (!payloadResult.success) {
-		return c.json({ ok: false, error: "Invalid move payload." }, 400);
-	}
-
-	const stub = getMatchStub(c, matchIdResult.data);
-	return stub.fetch("https://do/move", {
-		method: "POST",
-		body: JSON.stringify(payloadResult.data),
-		headers: {
-			"content-type": "application/json",
-			"x-agent-id": c.get("agentId"),
-			"x-match-id": matchIdResult.data,
-		},
-	});
+app.post("/v1/internal/matches/:id/move", async (c) => {
+	const runner = getRunnerAgentId(c);
+	if (!runner.ok) return runner.response;
+	return submitMove(c, runner.agentId);
 });
 
 app.post("/v1/matches/:id/finish", async (c) => {
@@ -265,7 +324,11 @@ app.get("/v1/matches/:id/state", async (c) => {
 	}
 
 	const stub = getMatchStub(c, matchIdResult.data);
-	return stub.fetch("https://do/state");
+	return stub.fetch("https://do/state", {
+		headers: {
+			"x-match-id": matchIdResult.data,
+		},
+	});
 });
 
 app.get("/v1/matches/:id/stream", async (c) => {
@@ -277,8 +340,26 @@ app.get("/v1/matches/:id/stream", async (c) => {
 
 	const stub = getMatchStub(c, matchIdResult.data);
 	return stub.fetch("https://do/stream", {
+		signal: c.req.raw.signal,
 		headers: {
 			"x-agent-id": c.get("agentId"),
+			"x-match-id": matchIdResult.data,
+		},
+	});
+});
+
+app.get("/v1/matches/:id/events", async (c) => {
+	const matchId = c.req.param("id");
+	const matchIdResult = matchIdSchema.safeParse(matchId);
+	if (!matchIdResult.success) {
+		return c.json({ ok: false, error: "Match id must be a UUID." }, 400);
+	}
+
+	const stub = getMatchStub(c, matchIdResult.data);
+	return stub.fetch("https://do/events", {
+		signal: c.req.raw.signal,
+		headers: {
+			"x-match-id": matchIdResult.data,
 		},
 	});
 });
@@ -291,7 +372,12 @@ app.get("/v1/matches/:id/spectate", async (c) => {
 	}
 
 	const stub = getMatchStub(c, matchIdResult.data);
-	return stub.fetch("https://do/spectate");
+	return stub.fetch("https://do/spectate", {
+		signal: c.req.raw.signal,
+		headers: {
+			"x-match-id": matchIdResult.data,
+		},
+	});
 });
 
 app.get("/v1/leaderboard", async (c) => {

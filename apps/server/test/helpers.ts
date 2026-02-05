@@ -35,15 +35,26 @@ export const readSseUntil = async (
 	predicate: (text: string) => boolean,
 	timeoutMs = 1500,
 	maxBytes = 4096,
-): Promise<string> => {
+	options?: {
+		throwOnTimeout?: boolean;
+		label?: string;
+		maxEventsPreview?: number;
+	},
+): Promise<{ text: string; matched: boolean; framesPreview: string[] }> => {
 	const body = res.body;
-	if (!body) return "";
+	if (!body) return { text: "", matched: false, framesPreview: [] };
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let text = "";
+	let pending = "";
+	const previewLimit = options?.maxEventsPreview ?? 6;
+	const frames: string[] = [];
 	const endAt = Date.now() + timeoutMs;
+	let matched = false;
+	let totalBytes = 0;
+	const windowSize = Math.min(maxBytes, 100_000);
 
-	while (Date.now() < endAt && text.length < maxBytes) {
+	while (Date.now() < endAt && totalBytes < maxBytes) {
 		const remaining = Math.max(endAt - Date.now(), 0);
 		let timeoutId: ReturnType<typeof setTimeout> | null = null;
 		const result = await Promise.race([
@@ -57,22 +68,52 @@ export const readSseUntil = async (
 		if ("timeout" in result) break;
 		if (result.done) break;
 		if (result.value) {
-			text += decoder.decode(result.value);
-			if (predicate(text)) break;
+			const chunk = decoder.decode(result.value);
+			totalBytes += chunk.length;
+			text = (text + chunk).slice(-windowSize);
+			pending += chunk;
+			let idx = pending.indexOf("\n\n");
+			while (idx >= 0) {
+				const frame = pending.slice(0, idx);
+				pending = pending.slice(idx + 2);
+				if (frame.trim().length > 0) {
+					frames.push(frame.trim());
+					if (frames.length > previewLimit) frames.shift();
+				}
+				idx = pending.indexOf("\n\n");
+			}
+			if (predicate(text)) {
+				matched = true;
+				break;
+			}
 		}
 	}
 
 	await reader.cancel().catch(() => {});
-	await body.cancel().catch(() => {});
-	return text;
+	try {
+		reader.releaseLock();
+	} catch {
+		// ignore
+	}
+	if (!matched && options?.throwOnTimeout) {
+		const label = options.label ? ` (${options.label})` : "";
+		const preview =
+			frames.length > 0
+				? frames.join("\n\n")
+				: text.length > 0
+					? text.slice(-2000)
+					: "<empty>";
+		throw new Error(`SSE wait timed out${label}. Received:\n${preview}`);
+	}
+	return { text, matched, framesPreview: frames };
 };
 
 export const readSseText = async (
 	res: Response,
 	maxBytes = 1024,
 ): Promise<string> => {
-	const text = await readSseUntil(res, () => true, 1000, maxBytes);
-	return text;
+	const result = await readSseUntil(res, () => true, 1000, maxBytes);
+	return result.text;
 };
 
 const sha256Hex = async (input: string) => {

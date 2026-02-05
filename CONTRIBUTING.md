@@ -18,3 +18,7 @@
 ## Test lanes
 - Fast/default: `pnpm test`
 - Durable/SSE: `pnpm test:durable` (known runner limitations)
+
+Notes:
+- Endgame persistence is gated in the normal lane (`apps/server/test/endgame-persistence.test.ts`).
+- Durable lane is best-effort and contains known flaky tests (see `apps/server/test/durable/endgame.durable.test.ts`).

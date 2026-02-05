@@ -43,7 +43,7 @@ it("rejects stale versions", async () => {
 			body: JSON.stringify({
 				moveId: crypto.randomUUID(),
 				expectedVersion: 999,
-				move: { type: "gather" },
+				move: { action: "pass" },
 			}),
 		},
 	);
@@ -75,7 +75,7 @@ it("rejects wrong agent turn", async () => {
 			body: JSON.stringify({
 				moveId: crypto.randomUUID(),
 				expectedVersion: payload.state?.stateVersion ?? 0,
-				move: { type: "gather" },
+				move: { action: "pass" },
 			}),
 		},
 	);
@@ -106,7 +106,7 @@ it("forfeits on invalid move schema", async () => {
 			body: JSON.stringify({
 				moveId: crypto.randomUUID(),
 				expectedVersion: payload.state?.stateVersion ?? 0,
-				move: { type: "cheat" },
+				move: { action: "cheat" },
 			}),
 		},
 	);
@@ -154,7 +154,7 @@ it("applies valid move and increments version", async () => {
 			body: JSON.stringify({
 				moveId: crypto.randomUUID(),
 				expectedVersion: payload.state?.stateVersion ?? 0,
-				move: { type: "gather" },
+				move: { action: "pass" },
 			}),
 		},
 	);

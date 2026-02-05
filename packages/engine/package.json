@@ -1,19 +1,22 @@
 {
-  "name": "@fightclaw/engine",
-  "type": "module",
-  "exports": {
-    ".": {
-      "default": "./src/index.ts"
-    },
-    "./*": {
-      "default": "./src/*.ts"
-    }
-  },
-  "dependencies": {
-    "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@fightclaw/config": "workspace:*",
-    "typescript": "catalog:"
-  }
+	"name": "@fightclaw/engine",
+	"type": "module",
+	"exports": {
+		".": {
+			"default": "./src/index.ts"
+		},
+		"./*": {
+			"default": "./src/*.ts"
+		}
+	},
+	"scripts": {
+		"test": "bun test"
+	},
+	"dependencies": {
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@fightclaw/config": "workspace:*",
+		"typescript": "catalog:"
+	}
 }

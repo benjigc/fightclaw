@@ -15,7 +15,9 @@ export default defineWorkersConfig(async () => {
 
 	return {
 		test: {
-			include: ["test/**/*.durable.test.ts"],
+			include: process.env.VITEST_INCLUDE
+				? process.env.VITEST_INCLUDE.split(",")
+				: ["test/**/*.durable.test.ts"],
 			setupFiles: ["./test/setup.ts"],
 			fileParallelism: false,
 			maxConcurrency: 1,
@@ -29,6 +31,8 @@ export default defineWorkersConfig(async () => {
 						bindings: {
 							API_KEY_PEPPER: "test-pepper",
 							ADMIN_KEY: "test-admin",
+							INTERNAL_RUNNER_KEY: "test-runner",
+							TEST_MODE: "true",
 							CORS_ORIGIN: "",
 							TEST_MIGRATIONS: migrations,
 						},

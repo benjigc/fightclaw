@@ -1,4 +1,4 @@
-import { EventSchema, GameStateSchema } from "@fightclaw/engine";
+import { EventSchema, initialState } from "@fightclaw/engine";
 import { describe, expect, it } from "vitest";
 import {
 	buildGameEndedEvent,
@@ -26,23 +26,14 @@ describe("event builders", () => {
 	});
 
 	it("builds your_turn with version", () => {
-		const event = buildYourTurnEvent("match-1", "agent-1", 3);
+		const event = buildYourTurnEvent("match-1", 3);
 		expect(event.eventVersion).toBe(1);
 		expect(event.event).toBe("your_turn");
 		expect(EventSchema.safeParse(event).success).toBe(true);
 	});
 
 	it("builds state with version", () => {
-		const state = GameStateSchema.parse({
-			seed: 1,
-			players: [
-				{ id: "a", hp: 10, energy: 0, shield: 0, ap: 2 },
-				{ id: "b", hp: 10, energy: 0, shield: 0, ap: 2 },
-			],
-			active: 0,
-			turn: 1,
-			status: "active",
-		});
+		const state = initialState(1, ["a", "b"]);
 		const event = buildStateEvent("match-1", state);
 		expect(event.eventVersion).toBe(1);
 		expect(event.event).toBe("state");
