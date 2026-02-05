@@ -6,6 +6,22 @@ beforeEach(async () => {
 	await resetDb();
 });
 
+const pollUntil = async <T>(
+	fn: () => Promise<T>,
+	predicate: (value: T) => boolean,
+	timeoutMs = 2000,
+	intervalMs = 50,
+): Promise<T> => {
+	const endAt = Date.now() + timeoutMs;
+	let last = await fn();
+	while (Date.now() < endAt) {
+		if (predicate(last)) return last;
+		await new Promise((resolve) => setTimeout(resolve, intervalMs));
+		last = await fn();
+	}
+	return last;
+};
+
 const getMatchmakerStub = () => {
 	const id = env.MATCHMAKER.idFromName("global");
 	return env.MATCHMAKER.get(id);
@@ -66,12 +82,19 @@ it("rotates featured match after end", async () => {
 		body: JSON.stringify({ reason: "forfeit" }),
 	});
 
-	const featuredSecond = await SELF.fetch("https://example.com/v1/featured");
-	const featuredSecondJson = (await featuredSecond.json()) as {
-		matchId: string | null;
-		status: string | null;
-		players: string[] | null;
-	};
+	const featuredSecondJson = await pollUntil(
+		async () => {
+			const featuredSecond = await SELF.fetch(
+				"https://example.com/v1/featured",
+			);
+			return (await featuredSecond.json()) as {
+				matchId: string | null;
+				status: string | null;
+				players: string[] | null;
+			};
+		},
+		(snapshot) => snapshot.matchId === matchTwo,
+	);
 
 	expect(featuredSecondJson.matchId).toBe(matchTwo);
 	expect(featuredSecondJson.status).toBe("active");

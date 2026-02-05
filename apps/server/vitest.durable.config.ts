@@ -23,6 +23,10 @@ export default defineWorkersConfig(async () => {
 			maxConcurrency: 1,
 			poolOptions: {
 				workers: {
+					// vpw currently trips over SQLite sidecar files (`.sqlite-shm`/`.sqlite-wal`)
+					// when using isolated storage + SQLite-backed Durable Objects.
+					// Durable tests in this repo already reset state explicitly.
+					isolatedStorage: false,
 					singleWorker: true,
 					wrangler: { configPath: "./wrangler.toml" },
 					miniflare: {
@@ -32,6 +36,8 @@ export default defineWorkersConfig(async () => {
 							API_KEY_PEPPER: "test-pepper",
 							ADMIN_KEY: "test-admin",
 							INTERNAL_RUNNER_KEY: "test-runner",
+							MATCHMAKING_ELO_RANGE: "200",
+							TURN_TIMEOUT_SECONDS: "60",
 							TEST_MODE: "true",
 							CORS_ORIGIN: "",
 							TEST_MIGRATIONS: migrations,

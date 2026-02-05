@@ -41,6 +41,7 @@ it("delivers match_found to both agents via events wait", async () => {
 	};
 	const eventA = payloadA.events[0];
 	const eventB = payloadB.events[0];
+	if (!eventA || !eventB) throw new Error("Missing match_found event.");
 
 	expect(eventA.event).toBe("match_found");
 	expect(eventB.event).toBe("match_found");

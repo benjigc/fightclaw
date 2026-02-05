@@ -56,4 +56,5 @@ temp
 CLAUDE.md
 FUTURE_FIXES.md
 index.ts
-project docs/
+project docs/*
+!project docs/war-of-attrition-rules.md

@@ -2,10 +2,15 @@
 
 **Engine Contract (MVP)**
 
-Coordinate mapping (7×7 offset grid):
+War of Attrition (Arena 21x9) canonical rules spec:
+- `project docs/war-of-attrition-rules.md`
+
+Note: the current engine implementation in this repo is the older 7x7 Hex Conquest MVP. The War of Attrition spec is the intended v2 ruleset and requires a breaking wire-contract migration (see `CONTRACTS.md`).
+
+Coordinate mapping (7x7 offset grid):
 - External `HexCoord` is `{ q, r }` with each in `[-3..3]`.
 - Map to grid indices via `row = r + 3`, `col = q + 3`.
-- Board is rectangular 7×7; all row/col combinations are valid.
+- Board is rectangular 7x7; all row/col combinations are valid.
 
 Odd-r neighbor rules (pointy-top, using `row/col`):
 - If `row` is even, neighbors are `(col+1,row)`, `(col,row+1)`, `(col-1,row+1)`, `(col-1,row)`, `(col-1,row-1)`, `(col,row-1)`.

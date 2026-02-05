@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 
 export type TestAgent = { id: string; key: string; name: string };
 
@@ -24,6 +24,22 @@ export const resetDb = async () => {
 	await env.DB.prepare("DELETE FROM leaderboard").run();
 	await env.DB.prepare("DELETE FROM matches").run();
 	await env.DB.prepare("DELETE FROM agents").run();
+
+	// With `isolatedStorage: false` in the durable lane, DO state persists across tests.
+	// Clear MatchmakerDO so queue/featured state doesn't leak and create flakiness.
+	if (env.INTERNAL_RUNNER_KEY) {
+		for (let attempt = 1; attempt <= 10; attempt += 1) {
+			const res = await SELF.fetch(
+				"https://example.com/v1/internal/__test__/reset",
+				{
+					method: "POST",
+					headers: { "x-runner-key": env.INTERNAL_RUNNER_KEY },
+				},
+			);
+			if (res.ok) break;
+			await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
+		}
+	}
 };
 
 export const authHeader = (key: string) => ({

@@ -6,9 +6,6 @@ import {
 	type NoEventsEvent,
 } from "../protocol/events";
 
-const LATEST_MATCH_KEY = "latestMatchId";
-const PENDING_MATCH_KEY = "pendingMatchId";
-const PENDING_AGENT_KEY = "pendingAgentId";
 const FEATURED_MATCH_KEY = "featuredMatchId";
 const FEATURED_QUEUE_KEY = "featuredQueue";
 const FEATURED_CACHE_KEY = "featuredCache";
@@ -16,14 +13,43 @@ const FEATURED_CACHE_TTL_MS = 10_000;
 const EVENT_BUFFER_PREFIX = "events:";
 const EVENT_BUFFER_MAX = 25;
 const ELO_START = 1500;
+const ELO_RANGE_DEFAULT = 200;
+const QUEUE_KEY = "queue";
+const ACTIVE_MATCH_PREFIX = "activeMatch:";
+const RECENT_PREFIX = "recent:";
+const QUEUE_TTL_MS = 10 * 60 * 1000;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
 
 type MatchmakerEnv = {
 	DB: D1Database;
 	MATCH: DurableObjectNamespace;
 	INTERNAL_RUNNER_KEY?: string;
+	MATCHMAKING_ELO_RANGE?: string;
+	TEST_MODE?: string;
 };
 
-type QueueResponse = { matchId: string; status: "waiting" | "ready" };
+type QueueJoinResponse = {
+	matchId: string;
+	status: "waiting" | "ready";
+	opponentId?: string;
+};
+type QueueStatusResponse =
+	| { status: "idle" }
+	| { status: "waiting"; matchId: string }
+	| { status: "ready"; matchId: string; opponentId: string };
+type QueueEntry = {
+	agentId: string;
+	matchId: string;
+	rating: number;
+	enqueuedAtMs: number;
+};
+type ActiveMatchEntry = {
+	matchId: string;
+	opponentId: string;
+	setAtMs: number;
+};
 type MatchmakerEvent = MatchFoundEvent | NoEventsEvent;
 type FeaturedStatus = "active" | "ended";
 type FeaturedSnapshot = {
@@ -36,77 +62,64 @@ type FeaturedCache = FeaturedSnapshot & { checkedAt: number };
 export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 	private waiters = new Map<string, Set<(event: MatchmakerEvent) => void>>();
 
+	private isDurableObjectResetError(error: unknown) {
+		if (!error || typeof error !== "object") return false;
+		const anyErr = error as { message?: unknown; durableObjectReset?: unknown };
+		if (anyErr.durableObjectReset === true) return true;
+		const message = typeof anyErr.message === "string" ? anyErr.message : "";
+		return message.includes("invalidating this Durable Object");
+	}
+
+	private async doFetchWithRetry(
+		stub: { fetch: (input: string, init?: RequestInit) => Promise<Response> },
+		input: string,
+		init?: RequestInit,
+		retries = 2,
+	) {
+		let attempt = 0;
+		for (;;) {
+			try {
+				return await stub.fetch(input, init);
+			} catch (error) {
+				if (attempt >= retries || !this.isDurableObjectResetError(error)) {
+					throw error;
+				}
+				attempt += 1;
+				await new Promise((resolve) => setTimeout(resolve, 10 * attempt));
+			}
+		}
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
 
-		if (request.method === "POST" && url.pathname === "/queue") {
-			const agentId = request.headers.get("x-agent-id");
-			if (!agentId) {
-				return Response.json(
-					{ error: "Agent id is required." },
-					{ status: 400 },
-				);
+		if (request.method === "POST" && url.pathname === "/__test__/reset") {
+			if (!this.env.TEST_MODE) {
+				return Response.json({ error: "Not found." }, { status: 404 });
 			}
+			const auth = this.requireRunnerKey(request);
+			if (!auth.ok) return auth.response;
+			await this.ctx.storage.deleteAll();
+			this.waiters.clear();
+			return Response.json({ ok: true });
+		}
 
-			const pendingMatchId =
-				await this.ctx.storage.get<string>(PENDING_MATCH_KEY);
-			const pendingAgentId =
-				await this.ctx.storage.get<string>(PENDING_AGENT_KEY);
+		if (
+			request.method === "POST" &&
+			(url.pathname === "/queue" || url.pathname === "/queue/join")
+		) {
+			return this.handleQueueJoin(request);
+		}
 
-			if (pendingMatchId && pendingAgentId) {
-				if (pendingAgentId === agentId) {
-					const response: QueueResponse = {
-						matchId: pendingMatchId,
-						status: "waiting",
-					};
-					return Response.json(response);
-				}
+		if (request.method === "GET" && url.pathname === "/queue/status") {
+			return this.handleQueueStatus(request);
+		}
 
-				await this.ctx.storage.delete(PENDING_MATCH_KEY);
-				await this.ctx.storage.delete(PENDING_AGENT_KEY);
-				await this.ctx.storage.put(LATEST_MATCH_KEY, pendingMatchId);
-
-				const players = [pendingAgentId, agentId];
-				const id = this.env.MATCH.idFromName(pendingMatchId);
-				const stub = this.env.MATCH.get(id);
-				await stub.fetch("https://do/init", {
-					method: "POST",
-					body: JSON.stringify({
-						players,
-						seed: Math.floor(Math.random() * 1_000_000),
-					}),
-					headers: {
-						"content-type": "application/json",
-						"x-match-id": pendingMatchId,
-					},
-				});
-
-				await this.recordMatchPlayers(pendingMatchId, players);
-				await this.enqueueFeaturedMatch(pendingMatchId, players);
-				await this.enqueueEvent(
-					pendingAgentId,
-					buildMatchFoundEvent(pendingMatchId, agentId),
-				);
-				await this.enqueueEvent(
-					agentId,
-					buildMatchFoundEvent(pendingMatchId, pendingAgentId),
-				);
-
-				const response: QueueResponse = {
-					matchId: pendingMatchId,
-					status: "ready",
-				};
-				return Response.json(response);
-			}
-
-			const matchId = crypto.randomUUID();
-			await this.ctx.storage.put(PENDING_MATCH_KEY, matchId);
-			await this.ctx.storage.put(PENDING_AGENT_KEY, agentId);
-			await this.ctx.storage.put(LATEST_MATCH_KEY, matchId);
-			await this.recordMatch(matchId);
-
-			const response: QueueResponse = { matchId, status: "waiting" };
-			return Response.json(response);
+		if (
+			(request.method === "DELETE" || request.method === "POST") &&
+			url.pathname === "/queue/leave"
+		) {
+			return this.handleQueueLeave(request);
 		}
 
 		if (request.method === "GET" && url.pathname === "/events/wait") {
@@ -133,8 +146,11 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 			const auth = this.requireRunnerKey(request);
 			if (!auth.ok) return auth.response;
 
-			const body = await request.json().catch(() => null);
-			const matchId = typeof body?.matchId === "string" ? body.matchId : null;
+			const body: unknown = await request.json().catch(() => null);
+			const matchId =
+				isRecord(body) && typeof body.matchId === "string"
+					? body.matchId
+					: null;
 			if (!matchId) {
 				return Response.json(
 					{ error: "matchId is required." },
@@ -143,6 +159,7 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 			}
 
 			await this.rotateFeatured(matchId);
+			await this.clearActiveMatchesForMatch(matchId);
 			return Response.json({ ok: true });
 		}
 
@@ -150,8 +167,11 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 			const auth = this.requireRunnerKey(request);
 			if (!auth.ok) return auth.response;
 
-			const body = await request.json().catch(() => null);
-			const matchId = typeof body?.matchId === "string" ? body.matchId : null;
+			const body: unknown = await request.json().catch(() => null);
+			const matchId =
+				isRecord(body) && typeof body.matchId === "string"
+					? body.matchId
+					: null;
 			if (!matchId) {
 				return Response.json(
 					{ error: "matchId is required." },
@@ -159,9 +179,10 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 				);
 			}
 
-			const players = Array.isArray(body?.players)
-				? body.players.filter((value: unknown) => typeof value === "string")
-				: [];
+			const players =
+				isRecord(body) && Array.isArray(body.players)
+					? body.players.filter((value: unknown) => typeof value === "string")
+					: [];
 			await this.enqueueFeaturedMatch(matchId, players);
 			return Response.json({ ok: true });
 		}
@@ -189,7 +210,7 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 
 			const id = this.env.MATCH.idFromName(snapshot.matchId);
 			const stub = this.env.MATCH.get(id);
-			const resp = await stub.fetch("https://do/state");
+			const resp = await this.doFetchWithRetry(stub, "https://do/state");
 			if (!resp.ok) {
 				return Response.json({ matchId: snapshot.matchId, state: null });
 			}
@@ -204,10 +225,359 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 		return new Response("Not found", { status: 404 });
 	}
 
+	private queueMutex: Promise<void> = Promise.resolve();
+
+	private async withQueueMutex<T>(fn: () => Promise<T>): Promise<T> {
+		const previous = this.queueMutex;
+		let release: (() => void) | undefined;
+		this.queueMutex = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await previous;
+		try {
+			return await fn();
+		} finally {
+			release?.();
+		}
+	}
+
+	private matchmakingEloRange() {
+		const raw = this.env.MATCHMAKING_ELO_RANGE;
+		const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
+		if (Number.isNaN(parsed) || parsed <= 0) return ELO_RANGE_DEFAULT;
+		return parsed;
+	}
+
+	private async loadQueuePruned(nowMs: number): Promise<QueueEntry[]> {
+		const queue = (await this.ctx.storage.get<QueueEntry[]>(QUEUE_KEY)) ?? [];
+		const pruned = queue.filter((entry) => {
+			if (!entry || typeof entry !== "object") return false;
+			if (typeof entry.agentId !== "string" || entry.agentId.length === 0) {
+				return false;
+			}
+			if (typeof entry.matchId !== "string" || entry.matchId.length === 0) {
+				return false;
+			}
+			if (typeof entry.rating !== "number" || !Number.isFinite(entry.rating)) {
+				return false;
+			}
+			if (
+				typeof entry.enqueuedAtMs !== "number" ||
+				!Number.isFinite(entry.enqueuedAtMs)
+			) {
+				return false;
+			}
+			return nowMs - entry.enqueuedAtMs <= QUEUE_TTL_MS;
+		});
+
+		if (pruned.length !== queue.length) {
+			await this.ctx.storage.put(QUEUE_KEY, pruned);
+		}
+		return pruned;
+	}
+
+	private async resolveActiveMatch(
+		agentId: string,
+	): Promise<ActiveMatchEntry | null> {
+		const key = `${ACTIVE_MATCH_PREFIX}${agentId}`;
+		const stored = await this.ctx.storage.get<ActiveMatchEntry>(key);
+		if (
+			!stored ||
+			typeof stored.matchId !== "string" ||
+			stored.matchId.length === 0 ||
+			typeof stored.opponentId !== "string" ||
+			stored.opponentId.length === 0
+		) {
+			if (stored) await this.ctx.storage.delete(key);
+			return null;
+		}
+
+		const status = await this.getMatchStatus(stored.matchId);
+		if (status !== "active") {
+			await this.ctx.storage.delete(key);
+			return null;
+		}
+
+		return stored;
+	}
+
+	private selectOpponent(
+		candidates: QueueEntry[],
+		rating: number,
+	): QueueEntry | null {
+		let best: QueueEntry | null = null;
+
+		for (const candidate of candidates) {
+			if (!best) {
+				best = candidate;
+				continue;
+			}
+
+			const diff = Math.abs(candidate.rating - rating);
+			const bestDiff = Math.abs(best.rating - rating);
+			if (diff < bestDiff) {
+				best = candidate;
+				continue;
+			}
+			if (diff > bestDiff) continue;
+
+			if (candidate.enqueuedAtMs < best.enqueuedAtMs) {
+				best = candidate;
+				continue;
+			}
+			if (candidate.enqueuedAtMs > best.enqueuedAtMs) continue;
+
+			if (candidate.agentId < best.agentId) {
+				best = candidate;
+			}
+		}
+
+		return best;
+	}
+
+	private async handleQueueJoin(request: Request): Promise<Response> {
+		return this.withQueueMutex(async () => {
+			const agentId = request.headers.get("x-agent-id");
+			if (!agentId) {
+				return Response.json(
+					{ error: "Agent id is required." },
+					{ status: 400 },
+				);
+			}
+
+			const activeMatch = await this.resolveActiveMatch(agentId);
+			if (activeMatch) {
+				const response: QueueJoinResponse = {
+					matchId: activeMatch.matchId,
+					status: "ready",
+					opponentId: activeMatch.opponentId,
+				};
+				return Response.json(response);
+			}
+
+			const nowMs = Date.now();
+			let queue = await this.loadQueuePruned(nowMs);
+
+			const existing = queue.find((entry) => entry.agentId === agentId);
+			if (existing) {
+				const response: QueueJoinResponse = {
+					matchId: existing.matchId,
+					status: "waiting",
+				};
+				return Response.json(response);
+			}
+
+			const rating = await this.getRating(agentId);
+			const range = this.matchmakingEloRange();
+
+			const eligible = queue.filter(
+				(entry) =>
+					entry.agentId !== agentId && Math.abs(entry.rating - rating) <= range,
+			);
+
+			let candidates = eligible;
+			const lastOpponent = await this.ctx.storage.get<string>(
+				`${RECENT_PREFIX}${agentId}`,
+			);
+			if (lastOpponent && candidates.length > 0) {
+				const opponentRecents = await Promise.all(
+					candidates.map(async (entry) => {
+						return await this.ctx.storage.get<string>(
+							`${RECENT_PREFIX}${entry.agentId}`,
+						);
+					}),
+				);
+
+				const preferred = candidates.filter(
+					(entry, idx) =>
+						entry.agentId !== lastOpponent && opponentRecents[idx] !== agentId,
+				);
+				if (preferred.length > 0) {
+					candidates = preferred;
+				}
+			}
+
+			const opponent = this.selectOpponent(candidates, rating);
+			if (opponent) {
+				queue = queue.filter((entry) => entry.agentId !== opponent.agentId);
+				await this.ctx.storage.put(QUEUE_KEY, queue);
+
+				const matchId = opponent.matchId;
+				const players = [opponent.agentId, agentId];
+
+				const id = this.env.MATCH.idFromName(matchId);
+				const stub = this.env.MATCH.get(id);
+				const initResp = await this.doFetchWithRetry(stub, "https://do/init", {
+					method: "POST",
+					body: JSON.stringify({
+						players,
+						seed: Math.floor(Math.random() * 1_000_000),
+					}),
+					headers: {
+						"content-type": "application/json",
+						"x-match-id": matchId,
+					},
+				});
+				if (!initResp.ok) {
+					// Best-effort recovery: re-add opponent to queue so they aren't lost.
+					const restored: QueueEntry = {
+						agentId: opponent.agentId,
+						matchId: opponent.matchId,
+						rating: opponent.rating,
+						enqueuedAtMs: opponent.enqueuedAtMs,
+					};
+					const current =
+						(await this.ctx.storage.get<QueueEntry[]>(QUEUE_KEY)) ?? [];
+					if (!current.some((entry) => entry.agentId === restored.agentId)) {
+						current.push(restored);
+						await this.ctx.storage.put(QUEUE_KEY, current);
+					}
+					return Response.json(
+						{ error: "Match initialization failed." },
+						{ status: 503 },
+					);
+				}
+
+				await this.recordMatch(matchId);
+				await this.recordMatchPlayers(matchId, players);
+				await this.enqueueFeaturedMatch(matchId, players);
+
+				const recentAKey = `${RECENT_PREFIX}${opponent.agentId}`;
+				const recentBKey = `${RECENT_PREFIX}${agentId}`;
+				const activeAKey = `${ACTIVE_MATCH_PREFIX}${opponent.agentId}`;
+				const activeBKey = `${ACTIVE_MATCH_PREFIX}${agentId}`;
+
+				await this.ctx.storage.put(recentAKey, agentId);
+				await this.ctx.storage.put(recentBKey, opponent.agentId);
+				await this.ctx.storage.put(activeAKey, {
+					matchId,
+					opponentId: agentId,
+					setAtMs: nowMs,
+				} satisfies ActiveMatchEntry);
+				await this.ctx.storage.put(activeBKey, {
+					matchId,
+					opponentId: opponent.agentId,
+					setAtMs: nowMs,
+				} satisfies ActiveMatchEntry);
+
+				await this.enqueueEvent(
+					opponent.agentId,
+					buildMatchFoundEvent(matchId, agentId),
+				);
+				await this.enqueueEvent(
+					agentId,
+					buildMatchFoundEvent(matchId, opponent.agentId),
+				);
+
+				const response: QueueJoinResponse = {
+					matchId,
+					status: "ready",
+					opponentId: opponent.agentId,
+				};
+				return Response.json(response);
+			}
+
+			const matchId = crypto.randomUUID();
+			const entry: QueueEntry = {
+				agentId,
+				matchId,
+				rating,
+				enqueuedAtMs: nowMs,
+			};
+			queue = [...queue, entry];
+			await this.ctx.storage.put(QUEUE_KEY, queue);
+
+			const response: QueueJoinResponse = { matchId, status: "waiting" };
+			return Response.json(response);
+		});
+	}
+
+	private async handleQueueStatus(request: Request): Promise<Response> {
+		return this.withQueueMutex(async () => {
+			const agentId = request.headers.get("x-agent-id");
+			if (!agentId) {
+				return Response.json(
+					{ error: "Agent id is required." },
+					{ status: 400 },
+				);
+			}
+
+			const activeMatch = await this.resolveActiveMatch(agentId);
+			if (activeMatch) {
+				const response: QueueStatusResponse = {
+					status: "ready",
+					matchId: activeMatch.matchId,
+					opponentId: activeMatch.opponentId,
+				};
+				return Response.json(response);
+			}
+
+			const nowMs = Date.now();
+			const queue = await this.loadQueuePruned(nowMs);
+			const existing = queue.find((entry) => entry.agentId === agentId);
+			if (existing) {
+				const response: QueueStatusResponse = {
+					status: "waiting",
+					matchId: existing.matchId,
+				};
+				return Response.json(response);
+			}
+
+			const response: QueueStatusResponse = { status: "idle" };
+			return Response.json(response);
+		});
+	}
+
+	private async handleQueueLeave(request: Request): Promise<Response> {
+		return this.withQueueMutex(async () => {
+			const agentId = request.headers.get("x-agent-id");
+			if (!agentId) {
+				return Response.json(
+					{ error: "Agent id is required." },
+					{ status: 400 },
+				);
+			}
+
+			const activeMatch = await this.resolveActiveMatch(agentId);
+			if (activeMatch) {
+				return Response.json(
+					{ ok: false, error: "Already matched." },
+					{ status: 409 },
+				);
+			}
+
+			const nowMs = Date.now();
+			const queue = await this.loadQueuePruned(nowMs);
+			const next = queue.filter((entry) => entry.agentId !== agentId);
+			if (next.length !== queue.length) {
+				await this.ctx.storage.put(QUEUE_KEY, next);
+			}
+
+			return Response.json({ ok: true });
+		});
+	}
+
+	private async clearActiveMatchesForMatch(matchId: string) {
+		const players = await this.getMatchPlayers(matchId);
+		if (!players || players.length === 0) return;
+
+		const deletes: string[] = [];
+		for (const agentId of players) {
+			const key = `${ACTIVE_MATCH_PREFIX}${agentId}`;
+			const stored = await this.ctx.storage.get<ActiveMatchEntry>(key);
+			if (stored && stored.matchId === matchId) {
+				deletes.push(key);
+			}
+		}
+		if (deletes.length > 0) {
+			await this.ctx.storage.delete(deletes);
+		}
+	}
+
 	private async recordMatch(matchId: string) {
 		try {
 			await this.env.DB.prepare(
-				"INSERT INTO matches(id, status, created_at) VALUES (?, 'active', datetime('now'))",
+				"INSERT OR IGNORE INTO matches(id, status, created_at) VALUES (?, 'active', datetime('now'))",
 			)
 				.bind(matchId)
 				.run();
@@ -313,7 +683,8 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 			}
 		}
 
-		let matchId = await this.ctx.storage.get<string>(FEATURED_MATCH_KEY);
+		let matchId =
+			(await this.ctx.storage.get<string>(FEATURED_MATCH_KEY)) ?? null;
 		let status: FeaturedStatus | null = null;
 
 		if (matchId) {
@@ -432,7 +803,7 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 		try {
 			const id = this.env.MATCH.idFromName(matchId);
 			const stub = this.env.MATCH.get(id);
-			const resp = await stub.fetch("https://do/state");
+			const resp = await this.doFetchWithRetry(stub, "https://do/state");
 			if (!resp.ok) return false;
 			const payload = (await resp.json()) as { state?: unknown };
 			return Boolean(payload?.state);
@@ -468,9 +839,11 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 		const key = `${EVENT_BUFFER_PREFIX}${agentId}`;
 		const events = (await this.ctx.storage.get<MatchmakerEvent[]>(key)) ?? [];
 		if (events.length > 0) {
-			const [next, ...rest] = events;
-			await this.ctx.storage.put(key, rest);
-			return next;
+			const next = events[0];
+			if (next) {
+				await this.ctx.storage.put(key, events.slice(1));
+				return next;
+			}
 		}
 
 		return new Promise((resolve) => {

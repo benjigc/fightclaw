@@ -1,17 +1,41 @@
-# Fightclaw Contracts (v1)
+# Fightclaw Contracts (v2 - War of Attrition)
 
 This file is the single source of truth for public wire contracts. Any change to request/response shapes or event payloads must update this file.
 
-## Locks (Must Not Drift)
+This repo currently implements the older v1 (7x7 `{ q, r }`) ruleset in code. This document defines the **breaking** v2 wire contract for the War of Attrition ruleset (Arena 21x9) and preserves the v1 contract below for reference during migration.
 
-These are the hard contracts across instances:
-- Coordinate system: 7×7 offset grid (rectangular), using `{ q, r }` mapped to `-3..3` with odd-r neighbor rules.
-- Spectator SSE: first event is `state`, then state updates, terminal `game_ended`, all with `eventVersion: 1`.
-- Move format: `{ action, unitId?, targetHex?, unitType?, reasoning? }` with `targetHex` using `{ q, r }`.
+Canonical rules spec for v2:
+- `project docs/war-of-attrition-rules.md`
+
+## Locks (Must Not Drift) - v2 (War of Attrition)
+
+These are the hard contracts across instances for v2:
+- Coordinate system: 21x9 offset hex grid using `HexId` strings (`"A1".."I21"`), with odd-r neighbor rules defined by row parity.
+- Move format: `{ action, unitId?, to?, target?, at?, unitType?, reasoning? }` using `HexId` coordinates.
+- Turn progression: `turn` is a **full round** (A then B). `turn` increments only after Player B ends their player-turn.
+- Deterministic: no randomness in combat, capture, reserves, income, or victory.
+
+Event schema notes:
+- SSE envelope stays the same shape as v1 (`eventVersion`, `event`, etc.).
+- The `state` payload's internal `game` shape changes for v2 (wood/vp/reserves, HexId coords, new board types).
 
 ## Move Request/Response
 
 Endpoint: `POST /v1/matches/{matchId}/move` (agent-auth)
+
+### Move Schema (v2)
+
+```ts
+type HexId = string; // "A1".."I21"
+
+type Move =
+	| { action: "move"; unitId: string; to: HexId; reasoning?: string }
+	| { action: "attack"; unitId: string; target: HexId; reasoning?: string }
+	| { action: "recruit"; unitType: "infantry" | "cavalry" | "archer"; at: HexId; reasoning?: string }
+	| { action: "fortify"; unitId: string; reasoning?: string }
+	| { action: "end_turn"; reasoning?: string }
+	| { action: "pass"; reasoning?: string }; // legacy alias for end_turn
+```
 
 Request JSON:
 
@@ -21,9 +45,9 @@ Request JSON:
   "expectedVersion": 3,
   "move": {
     "action": "move",
-    "unitId": "unit_3",
-    "targetHex": { "q": 1, "r": -1 },
-    "reasoning": "Securing gold mine"
+    "unitId": "A-4",
+    "to": "E9",
+    "reasoning": "Advance toward center"
   }
 }
 ```
@@ -55,13 +79,78 @@ Response JSON (forfeit on invalid move):
 Notes:
 - `moveId` must be unique per match.
 - `expectedVersion` must equal the current `stateVersion` or the request is rejected with `409` and a `stateVersion` hint.
-- `move.action` enum: `move`, `attack`, `recruit`, `fortify`, `pass`.
+- `move.action` enum (v2): `move`, `attack`, `recruit`, `fortify`, `end_turn`, `pass`.
+  - `pass` is a legacy alias for `end_turn` (migration-only).
 - `move.unitType` enum: `infantry`, `cavalry`, `archer` (for recruit).
 - `reasonCode` is an alias of `reason` and is always the same string when present.
 
 Internal-only endpoint:
 
 Endpoint: `POST /v1/internal/matches/{matchId}/move` (runner-key + agent-id)
+
+## Game State Shape (v2)
+
+`state` objects in responses and SSE `state` events contain a `game` payload with this shape:
+
+```ts
+type PlayerSide = "A" | "B";
+type HexType =
+	| "plains"
+	| "forest"
+	| "hills"
+	| "high_ground"
+	| "gold_mine"
+	| "lumber_camp"
+	| "crown"
+	| "stronghold_a"
+	| "stronghold_b"
+	| "deploy_a"
+	| "deploy_b";
+
+type UnitType = "infantry" | "cavalry" | "archer";
+
+type Unit = {
+	id: string; // "A-1", "B-4", ...
+	type: UnitType;
+	owner: PlayerSide;
+	position: HexId;
+	isFortified: boolean;
+	// Per-player-turn bookkeeping for deterministic validation.
+	movedThisTurn: boolean;
+	movedDistance: number;
+	attackedThisTurn: boolean;
+	canActThisTurn: boolean;
+};
+
+type PlayerState = {
+	id: string; // agent id
+	gold: number;
+	wood: number;
+	vp: number;
+	units: Unit[];
+};
+
+type HexState = {
+	id: HexId;
+	type: HexType;
+	controlledBy: PlayerSide | null;
+	unitId: string | null;
+	// Only present for gold_mine and lumber_camp.
+	reserve?: number;
+};
+
+type GameState = {
+	turn: number; // full round (A then B)
+	activePlayer: PlayerSide;
+	actionsRemaining: number;
+	players: {
+		A: PlayerState;
+		B: PlayerState;
+	};
+	board: HexState[]; // 189 entries (A1..I21)
+	status: "active" | "ended";
+};
+```
 
 ## Event Schema (SSE, eventVersion=1)
 
@@ -109,6 +198,7 @@ Reason code enum (tight set):
 - `illegal_move`
 - `invalid_move`
 - `forfeit`
+- `turn_timeout`
 - `terminal`
 
 Interpretation:
@@ -116,6 +206,7 @@ Interpretation:
 - `illegal_move`: Move type is not legal for the current game state.
 - `invalid_move`: Engine rejected the move (e.g., insufficient AP/energy).
 - `forfeit`: Player explicitly forfeited via `/finish`.
+- `turn_timeout`: Active player did not submit a move before the per-turn deadline.
 - `terminal`: Match ended normally via game rules.
 
 ## Versioning + Idempotency Rules
@@ -124,3 +215,14 @@ Interpretation:
 - `moveId` is idempotent per match: reusing the same `moveId` returns the cached response.
 - Idempotency retention keeps the most recent 200 `moveId` entries per match.
 - Idempotency keys are stored per match (Durable Object storage).
+
+---
+
+# Legacy Reference: Contracts (v1 - Hex Conquest 7x7)
+
+These are the previous v1 locks across instances:
+- Coordinate system: 7x7 offset grid (rectangular), using `{ q, r }` mapped to `-3..3` with odd-r neighbor rules.
+- Spectator SSE: first event is `state`, then state updates, terminal `game_ended`, all with `eventVersion: 1`.
+- Move format: `{ action, unitId?, targetHex?, unitType?, reasoning? }` with `targetHex` using `{ q, r }`.
+
+v1 move.action enum: `move`, `attack`, `recruit`, `fortify`, `pass`.
