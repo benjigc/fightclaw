@@ -126,3 +126,148 @@
     @apply font-sans;
   }
 }
+
+.spectator-landing {
+  --spectator-bg: #050b10;
+  --spectator-panel: #0b151c;
+  --spectator-border: #1e3642;
+  --spectator-text: #d6f4f1;
+  --spectator-muted: #86a7a3;
+  --spectator-accent: #4de3c2;
+  --spectator-glow: rgba(77, 227, 194, 0.3);
+  min-height: 100%;
+  background-color: var(--spectator-bg);
+  color: var(--spectator-text);
+  font-family: "JetBrains Mono", "IBM Plex Mono", "Source Code Pro", ui-monospace, SFMono-Regular,
+    Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  letter-spacing: 0.02em;
+  position: relative;
+  overflow: hidden;
+}
+
+.spectator-landing::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+      rgba(255, 255, 255, 0.03) 1px,
+      transparent 1px
+    ),
+    radial-gradient(circle at 20% 20%, rgba(77, 227, 194, 0.12), transparent 45%),
+    radial-gradient(circle at 80% 40%, rgba(92, 204, 255, 0.12), transparent 50%);
+  background-size: 100% 3px, 100% 100%, 100% 100%;
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.spectator-frame {
+  position: relative;
+  z-index: 1;
+  padding: 28px;
+  display: grid;
+  gap: 20px;
+}
+
+.spectator-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.spectator-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--spectator-accent);
+  text-shadow: 0 0 12px var(--spectator-glow);
+}
+
+.spectator-subtitle {
+  font-size: 0.8rem;
+  color: var(--spectator-muted);
+  margin-top: 4px;
+}
+
+.spectator-status {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  text-align: right;
+  color: var(--spectator-muted);
+}
+
+.spectator-players {
+  font-size: 0.85rem;
+  padding: 6px 12px;
+  border: 1px solid var(--spectator-border);
+  background: rgba(11, 21, 28, 0.8);
+  width: fit-content;
+}
+
+.spectator-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+@media (min-width: 900px) {
+  .spectator-grid {
+    grid-template-columns: 1fr 1.4fr 1fr;
+  }
+}
+
+.spectator-panel {
+  border: 1px solid var(--spectator-border);
+  background: var(--spectator-panel);
+  padding: 16px;
+  min-height: 160px;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.4);
+}
+
+.panel-title {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--spectator-muted);
+  margin-bottom: 12px;
+  letter-spacing: 0.08em;
+}
+
+.panel-body {
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.panel-split {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ascii-board {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--spectator-text);
+  text-shadow: 0 0 8px rgba(77, 227, 194, 0.2);
+  margin: 0 0 12px 0;
+}
+
+.legend {
+  font-size: 0.7rem;
+  color: var(--spectator-muted);
+}
+
+.log-body {
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.log-line {
+  font-size: 0.72rem;
+  color: var(--spectator-text);
+}
+
+.muted {
+  color: var(--spectator-muted);
+}
