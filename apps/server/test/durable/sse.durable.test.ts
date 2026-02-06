@@ -66,3 +66,79 @@ it(
 	},
 	TEST_TIMEOUT_MS,
 );
+
+it(
+	"events stream emits engine_events after successful move",
+	async () => {
+		const { matchId, agentA } = await setupMatch();
+
+		const stream = await openSse(
+			`https://example.com/v1/matches/${matchId}/events`,
+		);
+
+		try {
+			// Begin consuming the SSE stream before applying the move so DO writes don't
+			// backpressure and hit the SSE write timeout.
+			const waitForEngineEvents = readSseUntil(
+				stream.res,
+				(value) => value.includes("event: engine_events"),
+				SSE_TIMEOUT_MS,
+				SSE_MAX_BYTES,
+				{ throwOnTimeout: true, label: "engine_events" },
+			);
+
+			const stateRes = await SELF.fetch(
+				`https://example.com/v1/matches/${matchId}/state`,
+			);
+			const stateJson = (await stateRes.json()) as {
+				state: { stateVersion: number } | null;
+			};
+			const expectedVersion = stateJson.state?.stateVersion ?? 0;
+
+			await SELF.fetch(`https://example.com/v1/matches/${matchId}/move`, {
+				method: "POST",
+				headers: {
+					...{ authorization: `Bearer ${agentA.key}` },
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					moveId: crypto.randomUUID(),
+					expectedVersion,
+					move: { action: "fortify", unitId: "A-1" },
+				}),
+			});
+
+			const result = await waitForEngineEvents;
+
+			const frame =
+				result.framesPreview.find((value) =>
+					value.includes("event: engine_events"),
+				) ?? null;
+			expect(frame).toBeTruthy();
+
+			const dataLine =
+				frame?.split("\n").find((line) => line.startsWith("data: ")) ?? null;
+			expect(dataLine).toBeTruthy();
+
+			const payload = JSON.parse(String(dataLine).slice("data: ".length)) as {
+				event?: string;
+				engineEvents?: unknown[];
+			};
+
+			expect(payload.event).toBe("engine_events");
+			const engineEvents = Array.isArray(payload.engineEvents)
+				? payload.engineEvents
+				: [];
+			expect(
+				engineEvents.some((event) => {
+					if (!event || typeof event !== "object") return false;
+					const record = event as { type?: unknown; at?: unknown };
+					return record.type === "fortify" && typeof record.at === "object";
+				}),
+			).toBe(true);
+		} finally {
+			await stream.close();
+		}
+	},
+	TEST_TIMEOUT_MS,
+);

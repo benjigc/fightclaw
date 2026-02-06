@@ -157,10 +157,42 @@ describe("hex conquest engine", () => {
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
+
+		const attackEvent = result.engineEvents.find(
+			(event) => event.type === "attack",
+		) as Extract<EngineEvent, { type: "attack" }> | undefined;
+		expect(attackEvent).toBeTruthy();
+		expect(attackEvent?.attackerId).toBe(attacker.id);
+		expect(attackEvent?.defenderId).toBe(defender.id);
+		expect(attackEvent?.attackerFrom).toEqual(attackerTo);
+		expect(attackEvent?.targetHex).toEqual(defenderTo);
+		expect(attackEvent?.distance).toBe(1);
+		expect(attackEvent?.ranged).toBe(false);
+
 		const defenderHex = result.state.board[defenderToIdx];
 		expect(result.state.players.A.units.length).toBe(0);
 		expect(result.state.players.B.units.length).toBe(0);
 		expect(defenderHex?.unitId ?? null).toBe(null);
 		expect(defenderHex?.controlledBy ?? null).toBe(null);
+	});
+
+	test("fortify event includes unit coord", () => {
+		const state = createInitialState(0, undefined, [...players]);
+		const unit = state.players.A.units[0] as Unit;
+
+		const result = applyMove(state, {
+			action: "fortify",
+			unitId: unit.id,
+		});
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		const fortifyEvent = result.engineEvents.find(
+			(event) => event.type === "fortify",
+		) as Extract<EngineEvent, { type: "fortify" }> | undefined;
+		expect(fortifyEvent).toBeTruthy();
+		expect(fortifyEvent?.unitId).toBe(unit.id);
+		expect(fortifyEvent?.at).toEqual(unit.position);
 	});
 });

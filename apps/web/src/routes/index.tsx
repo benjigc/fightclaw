@@ -1,11 +1,30 @@
+import {
+	applyMove,
+	type EngineEvent,
+	type HexCoord,
+	initialState,
+	type MatchState,
+	type Move,
+} from "@fightclaw/engine";
 import { env } from "@fightclaw/env/web";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { type GameState, renderBoardWithWarnings } from "@/lib/hex-conquest";
+import { AsciiBoard } from "@/components/ascii-board";
+import { renderBoardGridWithWarnings } from "@/lib/hex-conquest";
+import {
+	type EngineEventsEnvelopeV1,
+	useSpectatorAnimator,
+} from "@/lib/spectator-animations";
 
 export const Route = createFileRoute("/")({
 	component: SpectatorLanding,
+	validateSearch: (search: Record<string, unknown>) => ({
+		replayMatchId:
+			typeof search.replayMatchId === "string"
+				? search.replayMatchId
+				: undefined,
+	}),
 });
 
 type FeaturedResponse = {
@@ -18,7 +37,7 @@ type StateEvent = {
 	eventVersion: 1;
 	event: "state";
 	matchId: string | null;
-	state: GameState;
+	state: MatchState;
 };
 
 type GameEndedEvent = {
@@ -37,19 +56,36 @@ type LogEntry = {
 };
 
 function SpectatorLanding() {
+	const search = Route.useSearch();
+	const replayMatchId = search.replayMatchId ?? null;
+
 	const [featured, setFeatured] = useState<FeaturedResponse | null>(null);
-	const [latestState, setLatestState] = useState<GameState | null>(null);
+	const [latestState, setLatestState] = useState<MatchState | null>(null);
 	const [latestAscii, setLatestAscii] = useState<string | null>(null);
 	const [eventLog, setEventLog] = useState<LogEntry[]>([]);
 	const [connectionStatus, setConnectionStatus] = useState<
-		"idle" | "connecting" | "live" | "error"
+		"idle" | "connecting" | "live" | "replay" | "error"
 	>("idle");
 	const warningCache = useRef<Set<string>>(new Set());
 	const logSeq = useRef(0);
+	const replayFollowStarted = useRef(false);
+	const [replayShouldFollowLive, setReplayShouldFollowLive] = useState(false);
 
-	const matchId = featured?.matchId ?? null;
+	const matchId = replayMatchId ?? featured?.matchId ?? null;
+
+	const {
+		cellFx,
+		hudFx,
+		isAnimating,
+		enqueue: enqueueEngineEvents,
+		reset: resetAnimator,
+		setIdleFocus,
+	} = useSpectatorAnimator({
+		onApplyBaseState: (state) => setLatestState(state),
+	});
 
 	useEffect(() => {
+		if (replayMatchId) return;
 		let active = true;
 
 		const fetchFeatured = async () => {
@@ -83,10 +119,13 @@ function SpectatorLanding() {
 			active = false;
 			window.clearInterval(interval);
 		};
-	}, []);
+	}, [replayMatchId]);
 
 	useEffect(() => {
+		if (replayMatchId) return;
+
 		if (!matchId) {
+			resetAnimator();
 			setLatestState(null);
 			setLatestAscii(null);
 			setEventLog([]);
@@ -96,6 +135,8 @@ function SpectatorLanding() {
 		}
 
 		let active = true;
+		resetAnimator();
+		const hasBaseState = { current: false };
 		setLatestState(null);
 		setLatestAscii(null);
 		setEventLog([]);
@@ -115,6 +156,10 @@ function SpectatorLanding() {
 				if (!active) return;
 				if (state) {
 					setLatestState(state);
+					if (!hasBaseState.current) {
+						hasBaseState.current = true;
+						setIdleFocus(capitalForSide(state.activePlayer));
+					}
 				}
 				setLatestAscii(ascii);
 			} catch (error) {
@@ -159,6 +204,10 @@ function SpectatorLanding() {
 			setLatestState(state);
 			setLatestAscii(ascii);
 			setConnectionStatus("live");
+			if (!hasBaseState.current) {
+				hasBaseState.current = true;
+				setIdleFocus(capitalForSide(state.activePlayer));
+			}
 			setEventLog((prev) =>
 				[
 					...prev,
@@ -203,7 +252,37 @@ function SpectatorLanding() {
 			);
 		};
 
+		const handleEngineEvents = (event: MessageEvent<string>) => {
+			let payload: EngineEventsEnvelopeV1 | null = null;
+			try {
+				payload = JSON.parse(event.data) as EngineEventsEnvelopeV1;
+			} catch {
+				if (!active) return;
+				setEventLog((prev) =>
+					[
+						...prev,
+						{ id: ++logSeq.current, text: "Malformed engine_events payload" },
+					].slice(-12),
+				);
+				return;
+			}
+
+			if (
+				!payload ||
+				payload.eventVersion !== 1 ||
+				payload.event !== "engine_events"
+			) {
+				return;
+			}
+			if (!active) return;
+			enqueueEngineEvents(payload);
+		};
+
 		eventSource.addEventListener("state", handleStateEvent as EventListener);
+		eventSource.addEventListener(
+			"engine_events",
+			handleEngineEvents as EventListener,
+		);
 		eventSource.addEventListener(
 			"game_ended",
 			handleGameEnded as EventListener,
@@ -220,19 +299,242 @@ function SpectatorLanding() {
 			active = false;
 			eventSource.close();
 		};
-	}, [matchId]);
-
-	const boardResult = useMemo(() => {
-		if (latestAscii && latestAscii.trim().length > 0) {
-			return { text: latestAscii, warnings: [] };
-		}
-		if (!latestState) return null;
-		return renderBoardWithWarnings(latestState);
-	}, [latestAscii, latestState]);
+	}, [
+		enqueueEngineEvents,
+		matchId,
+		replayMatchId,
+		resetAnimator,
+		setIdleFocus,
+	]);
 
 	useEffect(() => {
-		if (!boardResult?.warnings?.length) return;
-		const newWarnings = boardResult.warnings.filter(
+		if (!replayMatchId) {
+			replayFollowStarted.current = false;
+			setReplayShouldFollowLive(false);
+			return;
+		}
+
+		let active = true;
+		replayFollowStarted.current = false;
+		setReplayShouldFollowLive(false);
+		resetAnimator();
+		setFeatured({ matchId: replayMatchId, status: "replay", players: null });
+		setLatestState(null);
+		setLatestAscii(null);
+		setEventLog([]);
+		setConnectionStatus("connecting");
+		warningCache.current.clear();
+
+		const runReplay = async () => {
+			try {
+				const res = await fetch(
+					`${env.VITE_SERVER_URL}/v1/matches/${replayMatchId}/log?limit=5000`,
+				);
+				if (!res.ok) {
+					throw new Error(`Log request failed (${res.status})`);
+				}
+
+				const json = (await res.json()) as MatchLogResponseV1;
+				if (!active) return;
+
+				const started = json.events.find(
+					(event) => event.eventType === "match_started",
+				);
+				const startedPayload = isRecord(started?.payload)
+					? started.payload
+					: null;
+				const seedRaw = startedPayload?.seed;
+				const playersRaw = startedPayload?.players;
+
+				const seed =
+					typeof seedRaw === "number" && Number.isFinite(seedRaw)
+						? seedRaw
+						: null;
+				const players = Array.isArray(playersRaw)
+					? playersRaw.filter((value) => typeof value === "string")
+					: null;
+
+				if (seed === null || !players || players.length !== 2) {
+					throw new Error("Replay missing match_started metadata.");
+				}
+
+				setFeatured({
+					matchId: replayMatchId,
+					status: "replay",
+					players,
+				});
+
+				let state = initialState(seed, players);
+				setLatestState(state);
+				setIdleFocus(capitalForSide(state.activePlayer));
+				setConnectionStatus("replay");
+
+				const moveRows = json.events
+					.filter((event) => event.eventType === "move_applied")
+					.sort((a, b) => a.id - b.id);
+
+				let replayed = 0;
+
+				for (const row of moveRows) {
+					if (!active) return;
+					const payload = isRecord(row.payload) ? row.payload : null;
+					const moveRaw = payload?.move;
+					if (!moveRaw || typeof moveRaw !== "object") continue;
+
+					const move = moveRaw as Move;
+					const result = applyMove(state, move);
+					if (!result.ok) {
+						throw new Error(
+							`Replay engine rejected move at row ${row.id}: ${result.error}`,
+						);
+					}
+					state = result.state;
+
+					const engineEventsRaw = payload?.engineEvents;
+					const engineEvents = Array.isArray(engineEventsRaw)
+						? (engineEventsRaw as EngineEvent[])
+						: result.engineEvents;
+
+					const agentId =
+						typeof payload?.agentId === "string" ? payload.agentId : "unknown";
+					const moveId =
+						typeof payload?.moveId === "string"
+							? payload.moveId
+							: `replay:${row.id}`;
+					const stateVersion =
+						typeof payload?.stateVersion === "number" &&
+						Number.isFinite(payload.stateVersion)
+							? payload.stateVersion
+							: replayed + 1;
+
+					const envelope: EngineEventsEnvelopeV1 = {
+						eventVersion: 1,
+						event: "engine_events",
+						matchId: replayMatchId,
+						stateVersion,
+						agentId,
+						moveId,
+						move,
+						engineEvents,
+						ts: typeof row.ts === "string" ? row.ts : new Date().toISOString(),
+					};
+
+					enqueueEngineEvents(envelope, { postState: state });
+					replayed += 1;
+				}
+
+				setEventLog((prev) =>
+					[
+						...prev,
+						{
+							id: ++logSeq.current,
+							text: `Replay loaded: ${replayed} moves.`,
+						},
+					].slice(-12),
+				);
+
+				if (state.status === "active") {
+					setReplayShouldFollowLive(true);
+					setEventLog((prev) =>
+						[
+							...prev,
+							{
+								id: ++logSeq.current,
+								text: "Replay reached live match; will follow stream after catch-up.",
+							},
+						].slice(-12),
+					);
+				}
+			} catch (error) {
+				if (!active) return;
+				setConnectionStatus("error");
+				setEventLog((prev) =>
+					[
+						...prev,
+						{
+							id: ++logSeq.current,
+							text: `Replay failed: ${(error as Error).message}`,
+						},
+					].slice(-12),
+				);
+			}
+		};
+
+		void runReplay();
+
+		return () => {
+			active = false;
+		};
+	}, [enqueueEngineEvents, replayMatchId, resetAnimator, setIdleFocus]);
+
+	useEffect(() => {
+		if (!replayMatchId) return;
+		if (!replayShouldFollowLive) return;
+		if (isAnimating) return;
+		if (replayFollowStarted.current) return;
+
+		replayFollowStarted.current = true;
+		let active = true;
+
+		const eventSource = new EventSource(
+			`${env.VITE_SERVER_URL}/v1/matches/${replayMatchId}/events`,
+		);
+
+		const handleStateEvent = (event: MessageEvent<string>) => {
+			let payload: StateEvent | null = null;
+			try {
+				payload = JSON.parse(event.data) as StateEvent;
+			} catch {
+				return;
+			}
+			if (!payload || payload.eventVersion !== 1 || payload.event !== "state")
+				return;
+			if (!active) return;
+			const { state, ascii } = parseStateEnvelope(payload);
+			if (!state) return;
+			setLatestState(state);
+			setLatestAscii(ascii);
+			setConnectionStatus("live");
+		};
+
+		const handleEngineEvents = (event: MessageEvent<string>) => {
+			let payload: EngineEventsEnvelopeV1 | null = null;
+			try {
+				payload = JSON.parse(event.data) as EngineEventsEnvelopeV1;
+			} catch {
+				return;
+			}
+			if (
+				!payload ||
+				payload.eventVersion !== 1 ||
+				payload.event !== "engine_events"
+			) {
+				return;
+			}
+			if (!active) return;
+			enqueueEngineEvents(payload);
+		};
+
+		eventSource.addEventListener("state", handleStateEvent as EventListener);
+		eventSource.addEventListener(
+			"engine_events",
+			handleEngineEvents as EventListener,
+		);
+
+		return () => {
+			active = false;
+			eventSource.close();
+		};
+	}, [enqueueEngineEvents, isAnimating, replayMatchId, replayShouldFollowLive]);
+
+	const boardGridResult = useMemo(() => {
+		if (!latestState) return null;
+		return renderBoardGridWithWarnings(latestState);
+	}, [latestState]);
+
+	useEffect(() => {
+		if (!boardGridResult?.warnings?.length) return;
+		const newWarnings = boardGridResult.warnings.filter(
 			(warning) => !warningCache.current.has(warning),
 		);
 		if (newWarnings.length === 0) return;
@@ -248,20 +550,39 @@ function SpectatorLanding() {
 				})),
 			].slice(-12),
 		);
-	}, [boardResult]);
+	}, [boardGridResult]);
 
 	const statusLabel = featured?.status ?? "waiting";
 	const playersLabel = featured?.players?.length
 		? `A: ${featured.players[0] ?? "A"}  B: ${featured.players[1] ?? "B"}`
 		: null;
 
+	const controlCounts = useMemo(() => {
+		if (!latestState) return null;
+		const board = (latestState as { board?: unknown }).board;
+		const hexes = Array.isArray(board)
+			? board
+			: board && typeof board === "object"
+				? Object.values(board as Record<string, unknown>)
+				: [];
+		let a = 0;
+		let b = 0;
+		for (const hex of hexes) {
+			if (!hex || typeof hex !== "object") continue;
+			const controlledBy = (hex as { controlledBy?: unknown }).controlledBy;
+			if (controlledBy === "A") a += 1;
+			if (controlledBy === "B") b += 1;
+		}
+		return { A: a, B: b };
+	}, [latestState]);
+
 	const resourceSummary = latestState
 		? {
 				A: latestState.players.A,
 				B: latestState.players.B,
 				counts: {
-					A: latestState.players.A.controlledHexes?.length ?? 0,
-					B: latestState.players.B.controlledHexes?.length ?? 0,
+					A: controlCounts?.A ?? 0,
+					B: controlCounts?.B ?? 0,
 				},
 			}
 		: null;
@@ -292,13 +613,14 @@ function SpectatorLanding() {
 						<div className="panel-title">SYSTEM HUD</div>
 						{latestState ? (
 							<div className="panel-body">
-								<div>
+								<div
+									className={
+										hudFx.passPulse ? "hud-line hud-pass-pulse" : "hud-line"
+									}
+								>
 									Turn: {latestState.turn} | Active: {latestState.activePlayer}{" "}
 									| AP: {latestState.actionsRemaining}
 								</div>
-								{latestState.phase ? (
-									<div>Phase: {latestState.phase}</div>
-								) : null}
 								{resourceSummary ? (
 									<div className="panel-split">
 										<div>
@@ -326,8 +648,22 @@ function SpectatorLanding() {
 					<div className="spectator-panel board">
 						<div className="panel-title">ARENA MAP</div>
 						<div className="panel-body">
-							{boardResult?.text ? (
-								<pre className="ascii-board">{boardResult.text}</pre>
+							{boardGridResult &&
+							!boardGridResult.errorText &&
+							boardGridResult.grid.length ? (
+								<div className="ascii-board-shell">
+									<AsciiBoard
+										header={boardGridResult.header}
+										grid={boardGridResult.grid}
+										cellFx={cellFx}
+									/>
+								</div>
+							) : boardGridResult?.errorText ? (
+								<div className="muted">{boardGridResult.errorText}</div>
+							) : latestAscii && latestAscii.trim().length > 0 ? (
+								<div className="ascii-board-shell">
+									<pre className="ascii-board">{latestAscii}</pre>
+								</div>
 							) : (
 								<div className="muted">No board data yet.</div>
 							)}
@@ -357,14 +693,35 @@ function SpectatorLanding() {
 	);
 }
 
-function buildStateLogLine(state: GameState) {
+type MatchLogRowV1 = {
+	id: number;
+	ts: string;
+	eventType: string;
+	payload: unknown | null;
+	payloadParseError?: true;
+};
+
+type MatchLogResponseV1 = {
+	matchId: string;
+	events: MatchLogRowV1[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function capitalForSide(side: "A" | "B"): HexCoord {
+	return side === "A" ? { q: -3, r: -3 } : { q: 3, r: 3 };
+}
+
+function buildStateLogLine(state: MatchState) {
 	const a = state.players.A;
 	const b = state.players.B;
 	return `T${state.turn} ${state.activePlayer} AP ${state.actionsRemaining} | Gold A/B ${a.gold}/${b.gold} | Supply A/B ${a.supply}/${a.supplyCap} ${b.supply}/${b.supplyCap}`;
 }
 
 function parseStateEnvelope(input: unknown): {
-	state: GameState | null;
+	state: MatchState | null;
 	ascii: string | null;
 } {
 	if (!input || typeof input !== "object") {
@@ -387,7 +744,7 @@ function parseStateEnvelope(input: unknown): {
 		(container as { state?: unknown }).state ??
 		container;
 	if (candidate && typeof candidate === "object" && "players" in candidate) {
-		return { state: candidate as GameState, ascii: ascii ?? null };
+		return { state: candidate as MatchState, ascii: ascii ?? null };
 	}
 
 	return { state: null, ascii: ascii ?? null };

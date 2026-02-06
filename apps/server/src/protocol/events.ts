@@ -10,6 +10,7 @@ type EventOf<E extends SpectatorEvent["event"]> = Extract<
 export type MatchFoundEvent = EventOf<"match_found">;
 export type YourTurnEvent = EventOf<"your_turn">;
 export type StateEvent = EventOf<"state">;
+export type EngineEventsEvent = EventOf<"engine_events">;
 export type GameEndedEvent = EventOf<"game_ended">;
 export type NoEventsEvent = EventOf<"no_events">;
 
@@ -41,6 +42,16 @@ export const buildStateEvent = (
 	event: "state",
 	matchId,
 	state,
+});
+
+export const buildEngineEventsEvent = (
+	matchId: string,
+	payload: Omit<EngineEventsEvent, "eventVersion" | "event" | "matchId">,
+): EngineEventsEvent => ({
+	eventVersion: EVENT_VERSION,
+	event: "engine_events",
+	matchId,
+	...payload,
 });
 
 export const buildGameEndedEvent = (

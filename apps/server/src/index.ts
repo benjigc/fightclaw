@@ -250,7 +250,8 @@ app.use("/v1/matches/*", async (c, next) => {
 		c.req.method === "GET" &&
 		(path.endsWith("/state") ||
 			path.endsWith("/spectate") ||
-			path.endsWith("/events"))
+			path.endsWith("/events") ||
+			path.endsWith("/log"))
 	) {
 		return next();
 	}
@@ -443,6 +444,98 @@ app.get("/v1/matches/:id/state", async (c) => {
 			"x-request-id": c.get("requestId"),
 		},
 	});
+});
+
+app.get("/v1/matches/:id/log", async (c) => {
+	const matchId = c.req.param("id");
+	const matchIdResult = matchIdSchema.safeParse(matchId);
+	if (!matchIdResult.success) {
+		return c.json({ ok: false, error: "Match id must be a UUID." }, 400);
+	}
+
+	const afterIdRaw = c.req.query("afterId");
+	const limitRaw = c.req.query("limit");
+	const afterId = afterIdRaw ? Number.parseInt(afterIdRaw, 10) : 0;
+	const requestedLimit = limitRaw ? Number.parseInt(limitRaw, 10) : 500;
+	const limit =
+		Number.isFinite(requestedLimit) && requestedLimit > 0
+			? Math.min(requestedLimit, 5000)
+			: 500;
+
+	const matchRow = await c.env.DB.prepare(
+		"SELECT status FROM matches WHERE id = ? LIMIT 1",
+	)
+		.bind(matchIdResult.data)
+		.first<{ status: string | null }>();
+	if (!matchRow?.status) {
+		return c.json({ ok: false, error: "Match not found." }, 404);
+	}
+
+	let isPublic = matchRow.status === "ended";
+	if (!isPublic && matchRow.status === "active") {
+		try {
+			const stub = getMatchmakerStub(c);
+			const featuredResp = await doFetchWithRetry(stub, "https://do/featured", {
+				headers: { "x-request-id": c.get("requestId") },
+			});
+			if (featuredResp.ok) {
+				const featured = (await featuredResp.json()) as { matchId?: unknown };
+				if (featured && typeof featured.matchId === "string") {
+					isPublic = featured.matchId === matchIdResult.data;
+				}
+			}
+		} catch {
+			// Treat featured lookup failure as non-public.
+		}
+	}
+
+	if (!isPublic) {
+		const provided = c.req.header("x-admin-key");
+		if (!provided || provided !== c.env.ADMIN_KEY) {
+			return c.text("Forbidden", 403);
+		}
+	}
+
+	const { results } = await c.env.DB.prepare(
+		[
+			"SELECT id, match_id, turn, ts, event_type, payload_json",
+			"FROM match_events",
+			"WHERE match_id = ? AND id > ?",
+			"ORDER BY id ASC",
+			"LIMIT ?",
+		].join(" "),
+	)
+		.bind(matchIdResult.data, Number.isFinite(afterId) ? afterId : 0, limit)
+		.all<{
+			id: number;
+			match_id: string;
+			turn: number;
+			ts: string;
+			event_type: string;
+			payload_json: string;
+		}>();
+
+	const events = (results ?? []).map((row) => {
+		let payload: unknown | null = null;
+		let payloadParseError: true | undefined;
+		try {
+			payload = JSON.parse(row.payload_json);
+		} catch {
+			payload = null;
+			payloadParseError = true;
+		}
+		return {
+			id: row.id,
+			matchId: row.match_id,
+			turn: row.turn,
+			ts: row.ts,
+			eventType: row.event_type,
+			payload,
+			...(payloadParseError ? { payloadParseError } : {}),
+		};
+	});
+
+	return c.json({ matchId: matchIdResult.data, events });
 });
 
 app.get("/v1/matches/:id/stream", async (c) => {

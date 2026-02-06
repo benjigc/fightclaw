@@ -21,6 +21,10 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			"@": path.resolve(__dirname, "./src"),
+			"@fightclaw/engine": path.resolve(
+				__dirname,
+				"../../packages/engine/src/index.ts",
+			),
 		},
 	},
 	build: {

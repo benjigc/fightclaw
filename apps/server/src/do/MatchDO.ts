@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
 	applyMove,
+	type EngineEvent,
 	type GameState,
 	initialState,
 	isTerminal,
@@ -14,6 +15,7 @@ import type { AppBindings } from "../appTypes";
 import { log } from "../obs/log";
 import { emitMetric } from "../obs/metrics";
 import {
+	buildEngineEventsEvent,
 	buildGameEndedEvent,
 	buildStateEvent,
 	buildYourTurnEvent,
@@ -46,7 +48,7 @@ type MatchState = {
 };
 
 type MoveResult =
-	| { ok: true; state: MatchState }
+	| { ok: true; state: MatchState; engineEvents: EngineEvent[] }
 	| { ok: false; error: string };
 
 type MovePayload = {
@@ -629,12 +631,33 @@ export class MatchDO extends DurableObject<MatchEnv> {
 			}
 
 			await this.recordEvent(nextState, "move_applied", {
+				payloadVersion: 2,
 				agentId,
+				moveId: body.moveId,
 				move: moveParse.data,
 				stateVersion: nextState.stateVersion,
+				engineEvents: result.engineEvents,
+				ts: nextState.updatedAt,
 			});
 
 			await this.broadcastState(nextState);
+			{
+				const matchId = this.matchId ?? this.ctx.id.name;
+				if (matchId) {
+					await this.broadcast(
+						[...this.spectators],
+						"engine_events",
+						buildEngineEventsEvent(matchId, {
+							stateVersion: nextState.stateVersion,
+							agentId,
+							moveId: body.moveId,
+							move: moveParse.data,
+							engineEvents: result.engineEvents,
+							ts: nextState.updatedAt,
+						}),
+					);
+				}
+			}
 			this.broadcastYourTurn(nextState);
 			if (nextState.status === "ended") {
 				await this.recordEvent(nextState, "match_ended", {
@@ -1259,7 +1282,7 @@ const applyMoveToState = (state: MatchState, move: Move): MoveResult => {
 			};
 		}
 
-		return { ok: true, state: nextState };
+		return { ok: true, state: nextState, engineEvents: applied.engineEvents };
 	} catch (error) {
 		return { ok: false, error: (error as Error).message };
 	}

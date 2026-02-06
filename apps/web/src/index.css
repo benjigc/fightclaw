@@ -249,6 +249,174 @@
   color: var(--spectator-text);
   text-shadow: 0 0 8px rgba(77, 227, 194, 0.2);
   margin: 0 0 12px 0;
+  animation: asciiShimmer 4.5s ease-in-out infinite;
+}
+
+.ascii-board-shell {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.ascii-board-shell::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -40%;
+  height: 25%;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 50%,
+    transparent 100%
+  );
+  opacity: 0.06;
+  pointer-events: none;
+  animation: asciiScanline 7s linear infinite;
+}
+
+.ascii-cell {
+  display: inline-block;
+  width: 2ch;
+  position: relative;
+  border-radius: 2px;
+}
+
+.fx-idle-focus {
+  animation: idleFocusBlink 1.2s steps(2, end) infinite;
+}
+
+.fx-move-from {
+  background: rgba(77, 227, 194, 0.1);
+  outline: 1px solid rgba(77, 227, 194, 0.22);
+  outline-offset: -1px;
+  box-shadow: 0 0 10px rgba(77, 227, 194, 0.18);
+}
+
+.fx-move-to {
+  background: rgba(77, 227, 194, 0.18);
+  outline: 1px solid rgba(77, 227, 194, 0.35);
+  outline-offset: -1px;
+  box-shadow: 0 0 14px rgba(77, 227, 194, 0.28);
+}
+
+.fx-attack-attacker {
+  background: rgba(255, 107, 107, 0.1);
+  outline: 1px solid rgba(255, 107, 107, 0.22);
+  outline-offset: -1px;
+}
+
+.fx-attack-target {
+  background: rgba(255, 107, 107, 0.12);
+  outline: 1px solid rgba(255, 107, 107, 0.28);
+  outline-offset: -1px;
+}
+
+.fx-attack-impact {
+  background: rgba(255, 107, 107, 0.28);
+  color: #ffffff;
+  text-shadow: 0 0 10px rgba(255, 107, 107, 0.4);
+  animation: asciiImpact 120ms ease-out infinite alternate;
+}
+
+.fx-recruit {
+  background: rgba(255, 209, 102, 0.18);
+  outline: 1px solid rgba(255, 209, 102, 0.32);
+  outline-offset: -1px;
+  box-shadow: 0 0 10px rgba(255, 209, 102, 0.16);
+}
+
+.fx-fortify-flash {
+  background: rgba(92, 204, 255, 0.2);
+  outline: 1px solid rgba(92, 204, 255, 0.35);
+  outline-offset: -1px;
+  box-shadow: 0 0 14px rgba(92, 204, 255, 0.22);
+}
+
+.fx-fortify-shimmer {
+  background: rgba(92, 204, 255, 0.1);
+  outline: 1px solid rgba(92, 204, 255, 0.22);
+  outline-offset: -1px;
+  animation: fortifyShimmer 700ms ease-in-out infinite;
+}
+
+.fx-pass {
+  background: rgba(214, 244, 241, 0.12);
+  outline: 1px solid rgba(214, 244, 241, 0.18);
+  outline-offset: -1px;
+  box-shadow: 0 0 12px rgba(77, 227, 194, 0.16);
+}
+
+.hud-line {
+  transition: text-shadow 120ms ease, color 120ms ease;
+}
+
+.hud-pass-pulse {
+  color: var(--spectator-accent);
+  text-shadow: 0 0 12px var(--spectator-glow);
+  animation: hudPulse 380ms ease-out 1;
+}
+
+@keyframes asciiShimmer {
+  0%,
+  100% {
+    text-shadow: 0 0 8px rgba(77, 227, 194, 0.14);
+  }
+  50% {
+    text-shadow: 0 0 12px rgba(77, 227, 194, 0.28);
+  }
+}
+
+@keyframes asciiScanline {
+  0% {
+    transform: translateY(0%);
+  }
+  100% {
+    transform: translateY(520%);
+  }
+}
+
+@keyframes idleFocusBlink {
+  0%,
+  49% {
+    background: rgba(255, 255, 255, 0);
+  }
+  50%,
+  100% {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+@keyframes asciiImpact {
+  0% {
+    filter: brightness(1);
+  }
+  100% {
+    filter: brightness(1.3);
+  }
+}
+
+@keyframes fortifyShimmer {
+  0%,
+  100% {
+    box-shadow: 0 0 10px rgba(92, 204, 255, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(92, 204, 255, 0.24);
+  }
+}
+
+@keyframes hudPulse {
+  0% {
+    filter: brightness(1);
+  }
+  35% {
+    filter: brightness(1.2);
+  }
+  100% {
+    filter: brightness(1);
+  }
 }
 
 .legend {

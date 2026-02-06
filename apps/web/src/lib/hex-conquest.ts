@@ -41,6 +41,13 @@ export type GameState = {
 	board: BoardInput;
 };
 
+export type BoardGridResult = {
+	header: string;
+	grid: string[][];
+	warnings: string[];
+	errorText?: string;
+};
+
 const BOARD_MIN = -3;
 const BOARD_MAX = 3;
 const BOARD_SIZE = 7;
@@ -57,29 +64,29 @@ const TERRAIN_LETTERS: Record<HexState["type"], string> = {
 	plains: ".",
 };
 
-type RenderInput =
-	| GameState
-	| {
-			board?: unknown;
-			players?: {
-				A?: PlayerState;
-				B?: PlayerState;
-			};
-	  }
-	| BoardInput;
+export type RenderInput = unknown;
 
-export function renderBoardWithWarnings(input: RenderInput): {
-	text: string;
-	warnings: string[];
-} {
+export function renderBoardGridWithWarnings(
+	input: RenderInput,
+): BoardGridResult {
 	const warnings = new Set<string>();
 	const board = normalizeBoardInput(input, warnings);
 	if (!board) {
-		return { text: "Invalid board data", warnings: [...warnings] };
+		return {
+			header: "",
+			grid: [],
+			warnings: [...warnings],
+			errorText: "Invalid board data",
+		};
 	}
 	if (board.length === 0) {
 		warnings.add("Board empty");
-		return { text: "No board data", warnings: [...warnings] };
+		return {
+			header: "",
+			grid: [],
+			warnings: [...warnings],
+			errorText: "No board data",
+		};
 	}
 	if (board.length !== BOARD_SIZE * BOARD_SIZE) {
 		warnings.add(`Board size ${board.length} (expected 49)`);
@@ -136,15 +143,26 @@ export function renderBoardWithWarnings(input: RenderInput): {
 		(_, index) => index + 1,
 	).join("  ")}`;
 
-	const lines = [header];
+	return { header, grid, warnings: [...warnings] };
+}
 
+export function renderBoardWithWarnings(input: RenderInput): {
+	text: string;
+	warnings: string[];
+} {
+	const result = renderBoardGridWithWarnings(input);
+	if (result.errorText) {
+		return { text: result.errorText, warnings: result.warnings };
+	}
+
+	const lines = [result.header];
 	for (let row = 0; row < BOARD_SIZE; row += 1) {
 		const rowLabel = ROW_LABELS[row] ?? "?";
 		const indent = row % 2 === 1 ? "  " : "";
-		lines.push(`${rowLabel} ${indent}${grid[row].join(" ")}`);
+		lines.push(`${rowLabel} ${indent}${result.grid[row]?.join(" ") ?? ""}`);
 	}
 
-	return { text: lines.join("\n"), warnings: [...warnings] };
+	return { text: lines.join("\n"), warnings: result.warnings };
 }
 
 export function renderBoard(input: RenderInput): string {
