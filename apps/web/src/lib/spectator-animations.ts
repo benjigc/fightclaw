@@ -1,9 +1,4 @@
-import type {
-	EngineEvent,
-	HexCoord,
-	MatchState,
-	Move,
-} from "@fightclaw/engine";
+import type { EngineEvent, MatchState, Move } from "@fightclaw/engine";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type EngineEventsEnvelopeV1 = {
@@ -46,9 +41,8 @@ const TRANSIENT_CLASSES = [
 	"fx-pass",
 ];
 
-const coordKey = (coord: HexCoord) => `${coord.q},${coord.r}`;
-const isInBounds = (coord: HexCoord) =>
-	coord.q >= -3 && coord.q <= 3 && coord.r >= -3 && coord.r <= 3;
+const isValidHex = (id: unknown): id is string =>
+	typeof id === "string" && id.length >= 2;
 
 const inferSide = (events: EngineEvent[]): "A" | "B" | null => {
 	for (const event of events) {
@@ -69,8 +63,8 @@ const inferSide = (events: EngineEvent[]): "A" | "B" | null => {
 	return null;
 };
 
-const capitalForSide = (side: "A" | "B"): HexCoord =>
-	side === "A" ? { q: -3, r: -3 } : { q: 3, r: 3 };
+const strongholdForSide = (side: "A" | "B"): string =>
+	side === "A" ? "B2" : "B20";
 
 export function useSpectatorAnimator(options?: {
 	onApplyBaseState?: (state: MatchState) => void;
@@ -176,9 +170,9 @@ export function useSpectatorAnimator(options?: {
 	}, []);
 
 	const setIdleFocus = useCallback(
-		(coord: HexCoord | null) => {
+		(hexId: string | null) => {
 			const prevKey = idleFocusKeyRef.current;
-			const nextKey = coord && isInBounds(coord) ? coordKey(coord) : null;
+			const nextKey = isValidHex(hexId) ? hexId : null;
 
 			if (prevKey && prevKey !== nextKey) {
 				removeClassByKey(prevKey, "fx-idle-focus");
@@ -226,7 +220,7 @@ export function useSpectatorAnimator(options?: {
 			clearTransientFxAll();
 			flush();
 
-			const focusCoordFromAction = (): HexCoord | null => {
+			const focusHexFromAction = (): string | null => {
 				switch (envelope.move.action) {
 					case "move": {
 						const ev = envelope.engineEvents.find(
@@ -252,9 +246,10 @@ export function useSpectatorAnimator(options?: {
 						) as Extract<EngineEvent, { type: "fortify" }> | undefined;
 						return ev?.at ?? null;
 					}
+					case "end_turn":
 					case "pass": {
 						const side = inferSide(envelope.engineEvents) ?? "A";
-						return capitalForSide(side);
+						return strongholdForSide(side);
 					}
 				}
 			};
@@ -263,9 +258,9 @@ export function useSpectatorAnimator(options?: {
 				const ev = envelope.engineEvents.find((e) => e.type === "move_unit") as
 					| Extract<EngineEvent, { type: "move_unit" }>
 					| undefined;
-				if (ev && isInBounds(ev.from) && isInBounds(ev.to)) {
-					const fromKey = coordKey(ev.from);
-					const toKey = coordKey(ev.to);
+				if (ev && isValidHex(ev.from) && isValidHex(ev.to)) {
+					const fromKey = ev.from;
+					const toKey = ev.to;
 
 					addClassByKey(fromKey, "fx-move-from");
 					flush();
@@ -287,9 +282,9 @@ export function useSpectatorAnimator(options?: {
 				const ev = envelope.engineEvents.find((e) => e.type === "attack") as
 					| Extract<EngineEvent, { type: "attack" }>
 					| undefined;
-				if (ev && isInBounds(ev.attackerFrom) && isInBounds(ev.targetHex)) {
-					const atkKey = coordKey(ev.attackerFrom);
-					const tgtKey = coordKey(ev.targetHex);
+				if (ev && isValidHex(ev.attackerFrom) && isValidHex(ev.targetHex)) {
+					const atkKey = ev.attackerFrom;
+					const tgtKey = ev.targetHex;
 
 					addClassByKey(atkKey, "fx-attack-attacker");
 					addClassByKey(tgtKey, "fx-attack-target");
@@ -331,8 +326,8 @@ export function useSpectatorAnimator(options?: {
 				const ev = envelope.engineEvents.find((e) => e.type === "recruit") as
 					| Extract<EngineEvent, { type: "recruit" }>
 					| undefined;
-				if (ev && isInBounds(ev.at)) {
-					const atKey = coordKey(ev.at);
+				if (ev && isValidHex(ev.at)) {
+					const atKey = ev.at;
 
 					addClassByKey(atKey, "fx-recruit");
 					setOverrideByKey(atKey, "++");
@@ -354,8 +349,8 @@ export function useSpectatorAnimator(options?: {
 				const ev = envelope.engineEvents.find((e) => e.type === "fortify") as
 					| Extract<EngineEvent, { type: "fortify" }>
 					| undefined;
-				if (ev && isInBounds(ev.at)) {
-					const atKey = coordKey(ev.at);
+				if (ev && isValidHex(ev.at)) {
+					const atKey = ev.at;
 
 					addClassByKey(atKey, "fx-fortify-flash");
 					flush();
@@ -369,28 +364,28 @@ export function useSpectatorAnimator(options?: {
 					// Linger without blocking next move.
 					scheduleFortifyShimmer(atKey, scale(2000));
 				}
-			} else if (envelope.move.action === "pass") {
+			} else if (
+				envelope.move.action === "end_turn" ||
+				envelope.move.action === "pass"
+			) {
 				const side = inferSide(envelope.engineEvents) ?? "A";
-				const capital = capitalForSide(side);
-				if (isInBounds(capital)) {
-					const key = coordKey(capital);
-					setHudFx((prev) => ({ ...prev, passPulse: true }));
+				const key = strongholdForSide(side);
 
-					addClassByKey(key, "fx-pass");
-					flush();
-					await delay(scale(260));
-					if (runTokenRef.current !== token) return;
+				setHudFx((prev) => ({ ...prev, passPulse: true }));
+				addClassByKey(key, "fx-pass");
+				flush();
+				await delay(scale(260));
+				if (runTokenRef.current !== token) return;
 
-					setHudFx((prev) => ({ ...prev, passPulse: false }));
-					removeClassByKey(key, "fx-pass");
-					flush();
-					await delay(scale(120));
-					if (runTokenRef.current !== token) return;
-				}
+				setHudFx((prev) => ({ ...prev, passPulse: false }));
+				removeClassByKey(key, "fx-pass");
+				flush();
+				await delay(scale(120));
+				if (runTokenRef.current !== token) return;
 			}
 
 			// Update idle focus after action resolves (does not clear existing linger).
-			const focus = focusCoordFromAction();
+			const focus = focusHexFromAction();
 			setIdleFocus(focus);
 		},
 		[

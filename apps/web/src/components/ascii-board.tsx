@@ -12,8 +12,7 @@ export type AsciiBoardProps = {
 	cellFx?: Record<string, CellFx>;
 };
 
-const ROW_LABELS = ["A", "B", "C", "D", "E", "F", "G"];
-const OFFSET = 3; // q/r in [-3..3] mapped to [0..6]
+const ROW_LETTERS = "ABCDEFGHI";
 
 const normalizeToken = (value: string) => {
 	// Always render exactly 2 chars to preserve alignment.
@@ -26,16 +25,14 @@ export const AsciiBoard = memo(function AsciiBoard(props: AsciiBoardProps) {
 
 	for (let row = 0; row < props.grid.length; row += 1) {
 		const rowCells = props.grid[row] ?? [];
-		const rowLabel = ROW_LABELS[row] ?? "?";
-		const indent = row % 2 === 1 ? "  " : "";
+		const rowLabel = ROW_LETTERS[row] ?? "?";
+		const indent = row % 2 === 1 ? " " : "";
 
 		children.push(rowLabel, " ", indent);
 
 		for (let col = 0; col < rowCells.length; col += 1) {
 			const token = rowCells[col] ?? "  ";
-			const q = col - OFFSET;
-			const r = row - OFFSET;
-			const key = `${q},${r}`;
+			const key = `${ROW_LETTERS[row]}${col + 1}`;
 			const fx = props.cellFx?.[key];
 			const overrideText = fx?.overrideText ?? null;
 			const display = normalizeToken(overrideText ?? token);

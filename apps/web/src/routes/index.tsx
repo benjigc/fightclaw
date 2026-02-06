@@ -1,7 +1,6 @@
 import {
 	applyMove,
 	type EngineEvent,
-	type HexCoord,
 	initialState,
 	type MatchState,
 	type Move,
@@ -158,7 +157,7 @@ function SpectatorLanding() {
 					setLatestState(state);
 					if (!hasBaseState.current) {
 						hasBaseState.current = true;
-						setIdleFocus(capitalForSide(state.activePlayer));
+						setIdleFocus(strongholdForSide(state.activePlayer));
 					}
 				}
 				setLatestAscii(ascii);
@@ -206,7 +205,7 @@ function SpectatorLanding() {
 			setConnectionStatus("live");
 			if (!hasBaseState.current) {
 				hasBaseState.current = true;
-				setIdleFocus(capitalForSide(state.activePlayer));
+				setIdleFocus(strongholdForSide(state.activePlayer));
 			}
 			setEventLog((prev) =>
 				[
@@ -366,7 +365,7 @@ function SpectatorLanding() {
 
 				let state = initialState(seed, players);
 				setLatestState(state);
-				setIdleFocus(capitalForSide(state.activePlayer));
+				setIdleFocus(strongholdForSide(state.activePlayer));
 				setConnectionStatus("replay");
 
 				const moveRows = json.events
@@ -592,7 +591,9 @@ function SpectatorLanding() {
 			<div className="spectator-frame">
 				<header className="spectator-header">
 					<div>
-						<div className="spectator-title">HEX CONQUEST {"//"} LIVE FEED</div>
+						<div className="spectator-title">
+							WAR OF ATTRITION {"//"} LIVE FEED
+						</div>
 						<div className="spectator-subtitle">
 							Spectator console - read only
 						</div>
@@ -624,12 +625,12 @@ function SpectatorLanding() {
 								{resourceSummary ? (
 									<div className="panel-split">
 										<div>
-											A Gold: {resourceSummary.A.gold} | Supply:{" "}
-											{resourceSummary.A.supply}/{resourceSummary.A.supplyCap}
+											A Gold: {resourceSummary.A.gold} | Wood:{" "}
+											{resourceSummary.A.wood} | VP: {resourceSummary.A.vp}
 										</div>
 										<div>
-											B Gold: {resourceSummary.B.gold} | Supply:{" "}
-											{resourceSummary.B.supply}/{resourceSummary.B.supplyCap}
+											B Gold: {resourceSummary.B.gold} | Wood:{" "}
+											{resourceSummary.B.wood} | VP: {resourceSummary.B.vp}
 										</div>
 									</div>
 								) : null}
@@ -668,7 +669,9 @@ function SpectatorLanding() {
 								<div className="muted">No board data yet.</div>
 							)}
 							<div className="legend">
-								Ai/Bc/Aa = units | K/M/T/. = terrain | A/B/. = control
+								i/c/a = units | S=stronghold G=gold L=lumber C=crown
+								H=high_ground F=forest h=hills D=deploy .=plains | A/B/. =
+								control
 							</div>
 						</div>
 					</div>
@@ -710,14 +713,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function capitalForSide(side: "A" | "B"): HexCoord {
-	return side === "A" ? { q: -3, r: -3 } : { q: 3, r: 3 };
+function strongholdForSide(side: "A" | "B"): string {
+	return side === "A" ? "B2" : "B20";
 }
 
 function buildStateLogLine(state: MatchState) {
 	const a = state.players.A;
 	const b = state.players.B;
-	return `T${state.turn} ${state.activePlayer} AP ${state.actionsRemaining} | Gold A/B ${a.gold}/${b.gold} | Supply A/B ${a.supply}/${a.supplyCap} ${b.supply}/${b.supplyCap}`;
+	return `T${state.turn} ${state.activePlayer} AP ${state.actionsRemaining} | Gold A/B ${a.gold}/${b.gold} | Wood A/B ${a.wood}/${b.wood} | VP A/B ${a.vp}/${b.vp}`;
 }
 
 function parseStateEnvelope(input: unknown): {
