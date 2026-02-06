@@ -51,6 +51,7 @@ const obs = AnalyticsEngineDataset("obs", {
 const versionMetadata = VersionMetadata();
 
 export const server = await Worker("server", {
+	name: "fightclaw-server",
 	cwd: "../../apps/server",
 	entrypoint: "src/index.ts",
 	compatibility: "node",
