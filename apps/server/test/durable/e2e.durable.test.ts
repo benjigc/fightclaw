@@ -24,7 +24,7 @@ const pickMove = (moves: Move[]): Move => {
 		moves.find((m) => m.action === "recruit") ??
 		moves.find((m) => m.action === "move") ??
 		moves.find((m) => m.action === "fortify") ??
-		moves.find((m) => m.action === "pass") ??
+		moves.find((m) => m.action === "end_turn") ??
 		moves[0];
 	if (!move) throw new Error("No legal moves available.");
 	return move;

@@ -6,11 +6,9 @@
 		"dev": "wrangler dev --local --ip 127.0.0.1 --port 3000",
 		"build": "tsdown",
 		"check-types": "tsc -b",
-		"compile": "bun build --compile --minify --sourcemap --bytecode ./src/index.ts --outfile server",
-		"agent:create": "bun ./scripts/create-agent.ts",
+		"agent:create": "npx tsx ./scripts/create-agent.ts",
 		"test": "node ./node_modules/vitest/vitest.mjs -c vitest.unit.config.ts --run",
-		"test:durable": "node ./scripts/run-durable-tests.mjs",
-		"test:unit": "bunx vitest --run -c vitest.unit.config.ts"
+		"test:durable": "node ./scripts/run-durable-tests.mjs"
 	},
 	"dependencies": {
 		"@fightclaw/db": "workspace:*",
