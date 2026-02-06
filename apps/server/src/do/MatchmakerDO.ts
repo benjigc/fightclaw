@@ -1,4 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
+import type { AppBindings } from "../appTypes";
+import { emitMetric } from "../obs/metrics";
 import {
 	buildMatchFoundEvent,
 	buildNoEventsEvent,
@@ -28,7 +30,7 @@ type MatchmakerEnv = {
 	INTERNAL_RUNNER_KEY?: string;
 	MATCHMAKING_ELO_RANGE?: string;
 	TEST_MODE?: string;
-};
+} & Partial<Pick<AppBindings, "OBS" | "SENTRY_ENVIRONMENT">>;
 
 type QueueJoinResponse = {
 	matchId: string;
@@ -442,6 +444,19 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 				await this.recordMatchPlayers(matchId, players);
 				await this.enqueueFeaturedMatch(matchId, players);
 
+				// Emit metrics for match creation and found
+				emitMetric(this.env, "match_created", {
+					scope: "matchmaker_do",
+					matchId,
+				});
+				for (const playerId of players) {
+					emitMetric(this.env, "match_found", {
+						scope: "matchmaker_do",
+						matchId,
+						agentId: playerId,
+					});
+				}
+
 				const recentAKey = `${RECENT_PREFIX}${opponent.agentId}`;
 				const recentBKey = `${RECENT_PREFIX}${agentId}`;
 				const activeAKey = `${ACTIVE_MATCH_PREFIX}${opponent.agentId}`;
@@ -486,6 +501,12 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 			};
 			queue = [...queue, entry];
 			await this.ctx.storage.put(QUEUE_KEY, queue);
+
+			// Emit queue_join metric
+			emitMetric(this.env, "queue_join", {
+				scope: "matchmaker_do",
+				agentId,
+			});
 
 			const response: QueueJoinResponse = { matchId, status: "waiting" };
 			return Response.json(response);
@@ -588,16 +609,55 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 
 	private async recordMatchPlayers(matchId: string, players: string[]) {
 		try {
+			const [playerA, playerB] = players;
+			if (!playerA || !playerB) return;
+
 			const ratings = await Promise.all(
 				players.map((agentId) => this.getRating(agentId)),
 			);
+			const [ratingA, ratingB] = ratings;
+
+			// Prompt locking rule (Workstream A): attach active prompt version at match creation time.
+			const promptVersionByAgent = new Map<string, string>();
+			try {
+				const { results } = await this.env.DB.prepare(
+					[
+						"SELECT agent_id, prompt_version_id",
+						"FROM agent_prompt_active",
+						"WHERE game_type = ? AND agent_id IN (?, ?)",
+					].join(" "),
+				)
+					.bind("hex_conquest", playerA, playerB)
+					.all<{ agent_id: string; prompt_version_id: string }>();
+
+				for (const row of results ?? []) {
+					if (row.agent_id) {
+						promptVersionByAgent.set(row.agent_id, row.prompt_version_id);
+					}
+				}
+			} catch {
+				// Best-effort: prompt versions are optional; never block matchmaking.
+			}
+
 			await this.env.DB.batch([
 				this.env.DB.prepare(
-					"INSERT OR IGNORE INTO match_players(match_id, agent_id, seat, starting_rating, prompt_version_id) VALUES (?, ?, ?, ?, NULL)",
-				).bind(matchId, players[0], 0, ratings[0]),
+					"INSERT OR IGNORE INTO match_players(match_id, agent_id, seat, starting_rating, prompt_version_id) VALUES (?, ?, ?, ?, ?)",
+				).bind(
+					matchId,
+					playerA,
+					0,
+					ratingA,
+					promptVersionByAgent.get(playerA) ?? null,
+				),
 				this.env.DB.prepare(
-					"INSERT OR IGNORE INTO match_players(match_id, agent_id, seat, starting_rating, prompt_version_id) VALUES (?, ?, ?, ?, NULL)",
-				).bind(matchId, players[1], 1, ratings[1]),
+					"INSERT OR IGNORE INTO match_players(match_id, agent_id, seat, starting_rating, prompt_version_id) VALUES (?, ?, ?, ?, ?)",
+				).bind(
+					matchId,
+					playerB,
+					1,
+					ratingB,
+					promptVersionByAgent.get(playerB) ?? null,
+				),
 			]);
 		} catch (error) {
 			console.error("Failed to record match players", error);

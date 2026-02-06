@@ -5,6 +5,9 @@ declare module "cloudflare:test" {
 		API_KEY_PEPPER: string;
 		ADMIN_KEY: string;
 		INTERNAL_RUNNER_KEY?: string;
+		PROMPT_ENCRYPTION_KEY?: string;
+		SENTRY_DSN?: string;
+		SENTRY_ENVIRONMENT?: string;
 		TEST_MODE?: string;
 		MATCHMAKER: DurableObjectNamespace;
 	}

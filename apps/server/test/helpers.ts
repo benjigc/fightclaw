@@ -6,23 +6,38 @@ export const createAgent = async (
 	name: string,
 	key: string,
 	id = crypto.randomUUID(),
+	options?: { verified?: boolean; apiKeyId?: string },
 ): Promise<TestAgent> => {
 	const pepper = env.API_KEY_PEPPER;
 	const hash = await sha256Hex(`${pepper}${key}`);
-	await env.DB.prepare(
-		"INSERT INTO agents (id, name, api_key_hash) VALUES (?, ?, ?)",
-	)
-		.bind(id, name, hash)
-		.run();
+
+	const apiKeyId = options?.apiKeyId ?? crypto.randomUUID();
+	const verifiedAt =
+		options?.verified === false ? null : new Date().toISOString();
+
+	await env.DB.batch([
+		env.DB.prepare(
+			"INSERT INTO agents (id, name, api_key_hash, verified_at) VALUES (?, ?, ?, ?)",
+		).bind(id, name, hash, verifiedAt),
+		env.DB.prepare(
+			"INSERT INTO api_keys (id, agent_id, key_hash, key_prefix) VALUES (?, ?, ?, ?)",
+		).bind(apiKeyId, id, hash, key.slice(0, 8)),
+	]);
 	return { id, key, name };
 };
 
 export const resetDb = async () => {
+	// Order matters: tables with FKs must be deleted before their referenced tables.
+	// FK chain: match_events/match_players/match_results → matches
+	//           agent_prompt_active/prompt_versions/api_keys → agents
 	await env.DB.prepare("DELETE FROM match_events").run();
 	await env.DB.prepare("DELETE FROM match_players").run();
 	await env.DB.prepare("DELETE FROM match_results").run();
 	await env.DB.prepare("DELETE FROM leaderboard").run();
 	await env.DB.prepare("DELETE FROM matches").run();
+	await env.DB.prepare("DELETE FROM agent_prompt_active").run();
+	await env.DB.prepare("DELETE FROM prompt_versions").run();
+	await env.DB.prepare("DELETE FROM api_keys").run();
 	await env.DB.prepare("DELETE FROM agents").run();
 
 	// With `isolatedStorage: false` in the durable lane, DO state persists across tests.
@@ -138,4 +153,52 @@ const sha256Hex = async (input: string) => {
 	return Array.from(new Uint8Array(digest))
 		.map((byte) => byte.toString(16).padStart(2, "0"))
 		.join("");
+};
+
+export const pollUntil = async <T>(
+	fn: () => Promise<T>,
+	predicate: (value: T) => boolean,
+	timeoutMs = 2000,
+	intervalMs = 50,
+): Promise<T> => {
+	const endAt = Date.now() + timeoutMs;
+	let last = await fn();
+	while (Date.now() < endAt) {
+		if (predicate(last)) return last;
+		await new Promise((resolve) => setTimeout(resolve, intervalMs));
+		last = await fn();
+	}
+	return last;
+};
+
+/**
+ * Creates two agents, queues them both, and returns the matched game.
+ * Reduces boilerplate in tests that just need a ready match.
+ */
+export const setupMatch = async (
+	agentAName = "Alpha",
+	agentAKey = "alpha-key",
+	agentBName = "Beta",
+	agentBKey = "beta-key",
+): Promise<{ matchId: string; agentA: TestAgent; agentB: TestAgent }> => {
+	const agentA = await createAgent(agentAName, agentAKey);
+	const agentB = await createAgent(agentBName, agentBKey);
+
+	const first = await SELF.fetch("https://example.com/v1/matches/queue", {
+		method: "POST",
+		headers: authHeader(agentA.key),
+	});
+	const firstJson = (await first.json()) as { matchId: string };
+
+	const second = await SELF.fetch("https://example.com/v1/matches/queue", {
+		method: "POST",
+		headers: authHeader(agentB.key),
+	});
+	const secondJson = (await second.json()) as { matchId: string };
+
+	return {
+		matchId: secondJson.matchId ?? firstJson.matchId,
+		agentA,
+		agentB,
+	};
 };

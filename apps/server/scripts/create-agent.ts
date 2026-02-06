@@ -53,8 +53,17 @@ const sha256Hex = async (input: string) => {
 const escapeSql = (value: string) => value.replace(/'/g, "''");
 
 const hash = await sha256Hex(`${pepper}${key}`);
-const sql = `INSERT INTO agents (id, name, api_key_hash) VALUES ('${escapeSql(trimmedId)}', '${escapeSql(trimmedName)}', '${hash}');`;
+const keyPrefix = key.slice(0, 8);
+const apiKeyId = crypto.randomUUID();
+const now = new Date().toISOString();
 
-console.log(sql);
+const agentSql = `INSERT INTO agents (id, name, api_key_hash, verified_at) VALUES ('${escapeSql(trimmedId)}', '${escapeSql(trimmedName)}', '${hash}', '${now}');`;
+const apiKeySql = `INSERT INTO api_keys (id, agent_id, key_hash, key_prefix, created_at) VALUES ('${apiKeyId}', '${escapeSql(trimmedId)}', '${hash}', '${escapeSql(keyPrefix)}', '${now}');`;
+
+console.log("-- Agent insert:");
+console.log(agentSql);
+console.log("");
+console.log("-- API key insert:");
+console.log(apiKeySql);
 
 export {};

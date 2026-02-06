@@ -1,35 +1,44 @@
 import { env } from "@fightclaw/env/server";
-import { type Context, Hono, type Next } from "hono";
+import * as Sentry from "@sentry/cloudflare";
+import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
-import { logger } from "hono/logger";
 import { z } from "zod";
 
-type RateLimitBinding = {
-	limit: (params: { key: string }) => Promise<{ success: boolean }>;
-};
-
-type AppBindings = {
-	DB: D1Database;
-	CORS_ORIGIN: string;
-	API_KEY_PEPPER: string;
-	ADMIN_KEY: string;
-	INTERNAL_RUNNER_KEY?: string;
-	MATCHMAKING_ELO_RANGE?: string;
-	TURN_TIMEOUT_SECONDS?: string;
-	TEST_MODE?: string;
-	MATCHMAKER: DurableObjectNamespace;
-	MATCH: DurableObjectNamespace;
-	MOVE_SUBMIT_LIMIT?: RateLimitBinding;
-	READ_LIMIT?: RateLimitBinding;
-};
-
-type AppVariables = {
-	agentId: string;
-};
+import { createIdentity } from "./appContext";
+import type { AppBindings, AppVariables } from "./appTypes";
+import { MatchDO as MatchDOBase } from "./do/MatchDO";
+import { MatchmakerDO as MatchmakerDOBase } from "./do/MatchmakerDO";
+import {
+	requireAdminKey,
+	requireAgentAuth,
+	requireRunnerKey,
+	requireVerifiedAgent,
+} from "./middleware/auth";
+import { requestContext, withRequestId } from "./middleware/requestContext";
+import { requestLogger } from "./obs/requestLogger";
+import { sentryOptions } from "./obs/sentry";
+import { authRoutes } from "./routes/auth";
+import { internalPromptsRoutes, promptsRoutes } from "./routes/prompts";
 
 const app = new Hono<{ Bindings: AppBindings; Variables: AppVariables }>();
 
-app.use(logger());
+// Shared contracts (PR0): requestId + structured logs.
+app.use("/*", requestContext);
+app.use("/*", requestLogger);
+
+app.onError((err, c) => {
+	console.error("Unhandled error", err);
+	const requestId = c.get("requestId") ?? crypto.randomUUID();
+	const agentId = c.get("agentId");
+	Sentry.captureException(err, {
+		tags: {
+			request_id: requestId,
+			...(agentId ? { agent_id: agentId } : {}),
+		},
+	});
+	c.header("x-request-id", requestId);
+	return c.json({ ok: false, error: "Internal error.", requestId }, 500);
+});
 const allowedOrigins = (env.CORS_ORIGIN ?? "")
 	.split(",")
 	.map((origin) => origin.trim())
@@ -64,13 +73,6 @@ const getMatchmakerStub = (c: { env: AppBindings }) => {
 const getMatchStub = (c: { env: AppBindings }, matchId: string) => {
 	const id = c.env.MATCH.idFromName(matchId);
 	return c.env.MATCH.get(id);
-};
-
-const getBearerToken = (authorization?: string) => {
-	if (!authorization) return null;
-	const [scheme, token] = authorization.split(" ");
-	if (scheme?.toLowerCase() !== "bearer" || !token) return null;
-	return token.trim();
 };
 
 const matchIdSchema = z.string().uuid();
@@ -123,14 +125,6 @@ const doFetchWithRetry = async (
 	}
 };
 
-const sha256Hex = async (input: string) => {
-	const data = new TextEncoder().encode(input);
-	const digest = await crypto.subtle.digest("SHA-256", data);
-	return Array.from(new Uint8Array(digest))
-		.map((byte) => byte.toString(16).padStart(2, "0"))
-		.join("");
-};
-
 const corsMiddleware = cors({
 	origin: (origin) => {
 		if (!origin) return undefined;
@@ -148,6 +142,9 @@ app.use("/*", async (c, next) => {
 
 app.options("/v1/internal/*", (c) => c.text("Forbidden", 403));
 
+// Internal runner protection contract (PR0).
+app.use("/v1/internal/*", requireRunnerKey);
+
 app.use("/*", async (c, next) => {
 	const isRead = readMethods.has(c.req.method);
 	const limiter = isRead ? c.env.READ_LIMIT : c.env.MOVE_SUBMIT_LIMIT;
@@ -160,60 +157,10 @@ app.use("/*", async (c, next) => {
 	return next();
 });
 
-const requireAgent = async (
-	c: Context<{ Bindings: AppBindings; Variables: AppVariables }>,
-	next: Next,
-) => {
-	const token = getBearerToken(c.req.header("authorization"));
-	if (!token) return c.text("Unauthorized", 401);
-	const pepper = c.env.API_KEY_PEPPER;
-	if (!pepper) return c.text("Auth not configured", 500);
-
-	const hash = await sha256Hex(`${pepper}${token}`);
-	const row = await c.env.DB.prepare(
-		"SELECT id FROM agents WHERE api_key_hash = ?",
-	)
-		.bind(hash)
-		.first<{ id: string }>();
-
-	if (!row?.id) return c.text("Unauthorized", 401);
-	c.set("agentId", row.id);
-	return next();
-};
-
-const getRunnerAgentId = (
-	c: Context<{ Bindings: AppBindings; Variables: AppVariables }>,
-) => {
-	const expected = c.env.INTERNAL_RUNNER_KEY;
-	if (!expected) {
-		return {
-			ok: false as const,
-			response: c.json(
-				{
-					error: "Internal auth not configured.",
-					code: "internal_auth_not_configured",
-				},
-				503,
-			),
-		};
-	}
-	const provided = c.req.header("x-runner-key");
-	if (!provided || provided !== expected) {
-		return { ok: false as const, response: c.text("Forbidden", 403) };
-	}
-	const agentId = c.req.header("x-agent-id");
-	if (!agentId) {
-		return {
-			ok: false as const,
-			response: c.text("Agent id is required.", 400),
-		};
-	}
-	return { ok: true as const, agentId };
-};
-
 const submitMove = async (
 	c: Context<{ Bindings: AppBindings; Variables: AppVariables }>,
 	agentId: string,
+	options?: { telemetryHeaders?: Record<string, string> },
 ) => {
 	const matchId = c.req.param("id");
 	const matchIdResult = matchIdSchema.safeParse(matchId);
@@ -232,14 +179,21 @@ const submitMove = async (
 	}
 
 	const stub = getMatchStub(c, matchIdResult.data);
+	const headers: Record<string, string> = {
+		"content-type": "application/json",
+		"x-agent-id": agentId,
+		"x-match-id": matchIdResult.data,
+		"x-request-id": c.get("requestId"),
+	};
+	if (options?.telemetryHeaders) {
+		for (const [key, value] of Object.entries(options.telemetryHeaders)) {
+			headers[key] = value;
+		}
+	}
 	return stub.fetch("https://do/move", {
 		method: "POST",
 		body: JSON.stringify(payloadResult.data),
-		headers: {
-			"content-type": "application/json",
-			"x-agent-id": agentId,
-			"x-match-id": matchIdResult.data,
-		},
+		headers,
 	});
 };
 
@@ -254,6 +208,7 @@ const queueJoin = async (
 		method: "POST",
 		headers: {
 			"x-agent-id": agentId,
+			"x-request-id": c.get("requestId"),
 		},
 	});
 };
@@ -268,6 +223,7 @@ const queueStatus = async (
 	return doFetchWithRetry(stub, "https://do/queue/status", {
 		headers: {
 			"x-agent-id": agentId,
+			"x-request-id": c.get("requestId"),
 		},
 	});
 };
@@ -283,6 +239,7 @@ const queueLeave = async (
 		method: "DELETE",
 		headers: {
 			"x-agent-id": agentId,
+			"x-request-id": c.get("requestId"),
 		},
 	});
 };
@@ -297,16 +254,38 @@ app.use("/v1/matches/*", async (c, next) => {
 	) {
 		return next();
 	}
-	return requireAgent(c, next);
+	// Admin-only match finalization should not require agent auth.
+	if (path.endsWith("/finish")) return next();
+
+	return requireAgentAuth(c, async () => {
+		if (
+			path.startsWith("/v1/matches/queue") ||
+			(c.req.method === "POST" && path.endsWith("/move")) ||
+			(c.req.method === "GET" && path.endsWith("/stream"))
+		) {
+			return requireVerifiedAgent(c, next);
+		}
+		return next();
+	});
 });
 
 app.use("/v1/events/*", async (c, next) => {
-	return requireAgent(c, next);
+	return requireAgentAuth(c, async () => {
+		return requireVerifiedAgent(c, next);
+	});
 });
 
 app.use("/v1/queue/*", async (c, next) => {
-	return requireAgent(c, next);
+	return requireAgentAuth(c, async () => {
+		return requireVerifiedAgent(c, next);
+	});
 });
+
+// Workstream A routes.
+app.route("/v1/auth", authRoutes);
+app.route("/v1/agents", promptsRoutes);
+// Internal runner prompt injection (Workstream A).
+app.route("/v1/internal", internalPromptsRoutes);
 
 app.get("/", (c) => {
 	return c.text("OK");
@@ -341,19 +320,27 @@ app.post("/v1/matches/queue/leave", async (c) => {
 });
 
 app.get("/v1/events/wait", async (c) => {
+	const agentId = c.get("agentId");
+	if (!agentId) return c.text("Unauthorized", 401);
+
 	const stub = getMatchmakerStub(c);
 	const timeout = c.req.query("timeout");
 	const qs = timeout ? `?timeout=${encodeURIComponent(timeout)}` : "";
 	return doFetchWithRetry(stub, `https://do/events/wait${qs}`, {
 		headers: {
-			"x-agent-id": c.get("agentId"),
+			"x-agent-id": agentId,
+			"x-request-id": c.get("requestId"),
 		},
 	});
 });
 
 app.get("/v1/featured", async (c) => {
 	const stub = getMatchmakerStub(c);
-	return doFetchWithRetry(stub, "https://do/featured");
+	return doFetchWithRetry(stub, "https://do/featured", {
+		headers: {
+			"x-request-id": c.get("requestId"),
+		},
+	});
 });
 
 app.post("/v1/matches/:id/move", async (c) => {
@@ -363,26 +350,39 @@ app.post("/v1/matches/:id/move", async (c) => {
 });
 
 app.post("/v1/internal/matches/:id/move", async (c) => {
-	const runner = getRunnerAgentId(c);
-	if (!runner.ok) return runner.response;
-	return submitMove(c, runner.agentId);
+	const agentId = c.req.header("x-agent-id");
+	if (!agentId) return c.text("Agent id is required.", 400);
+	// Internal runner calls aren't bearer-auth; set for correlation/logging.
+	c.set("agentId", agentId);
+	c.set("auth", createIdentity({ agentId }));
+
+	const telemetryHeaders: Record<string, string> = {};
+	for (const key of [
+		"x-fc-model-provider",
+		"x-fc-model-id",
+		"x-fc-prompt-version-id",
+		"x-fc-inference-ms",
+		"x-fc-tokens-in",
+		"x-fc-tokens-out",
+	]) {
+		const value = c.req.header(key);
+		if (value) telemetryHeaders[key] = value;
+	}
+
+	return submitMove(c, agentId, { telemetryHeaders });
 });
 
 app.post("/v1/internal/__test__/reset", async (c) => {
 	if (!c.env.TEST_MODE) return c.text("Not found", 404);
 	const expected = c.env.INTERNAL_RUNNER_KEY;
 	if (!expected) return c.text("Internal auth not configured.", 503);
-	const provided = c.req.header("x-runner-key");
-	if (!provided || provided !== expected) return c.text("Forbidden", 403);
 
 	for (let attempt = 1; attempt <= 10; attempt += 1) {
 		try {
 			const stub = getMatchmakerStub(c);
 			const resp = await stub.fetch("https://do/__test__/reset", {
 				method: "POST",
-				headers: {
-					"x-runner-key": expected,
-				},
+				headers: withRequestId(c, { "x-runner-key": expected }),
 			});
 			if (resp.ok) return c.json({ ok: true });
 		} catch (error) {
@@ -394,21 +394,16 @@ app.post("/v1/internal/__test__/reset", async (c) => {
 	return c.json({ ok: false, error: "Reset unavailable." }, 503);
 });
 
-app.post("/v1/matches/:id/finish", async (c) => {
+app.post("/v1/matches/:id/finish", requireAdminKey, async (c) => {
 	const matchId = c.req.param("id");
 	const matchIdResult = matchIdSchema.safeParse(matchId);
 	if (!matchIdResult.success) {
 		return c.json({ ok: false, error: "Match id must be a UUID." }, 400);
 	}
 
-	const adminKey = c.req.header("x-admin-key");
-	if (!adminKey || adminKey !== c.env.ADMIN_KEY) {
-		return c.text("Forbidden", 403);
-	}
-
-	const agentId = c.get("agentId") ?? c.req.header("x-agent-id");
+	const agentId = c.req.header("x-agent-id");
 	if (!agentId) {
-		return c.text("Unauthorized", 401);
+		return c.json({ ok: false, error: "x-agent-id header is required." }, 400);
 	}
 
 	const jsonResult = await parseJson(c);
@@ -429,6 +424,7 @@ app.post("/v1/matches/:id/finish", async (c) => {
 			"content-type": "application/json",
 			"x-agent-id": agentId,
 			"x-match-id": matchIdResult.data,
+			"x-request-id": c.get("requestId"),
 		},
 	});
 });
@@ -444,6 +440,7 @@ app.get("/v1/matches/:id/state", async (c) => {
 	return stub.fetch("https://do/state", {
 		headers: {
 			"x-match-id": matchIdResult.data,
+			"x-request-id": c.get("requestId"),
 		},
 	});
 });
@@ -455,12 +452,16 @@ app.get("/v1/matches/:id/stream", async (c) => {
 		return c.json({ ok: false, error: "Match id must be a UUID." }, 400);
 	}
 
+	const agentId = c.get("agentId");
+	if (!agentId) return c.text("Unauthorized", 401);
+
 	const stub = getMatchStub(c, matchIdResult.data);
 	return stub.fetch("https://do/stream", {
 		signal: c.req.raw.signal,
 		headers: {
-			"x-agent-id": c.get("agentId"),
+			"x-agent-id": agentId,
 			"x-match-id": matchIdResult.data,
+			"x-request-id": c.get("requestId"),
 		},
 	});
 });
@@ -477,6 +478,7 @@ app.get("/v1/matches/:id/events", async (c) => {
 		signal: c.req.raw.signal,
 		headers: {
 			"x-match-id": matchIdResult.data,
+			"x-request-id": c.get("requestId"),
 		},
 	});
 });
@@ -493,6 +495,7 @@ app.get("/v1/matches/:id/spectate", async (c) => {
 		signal: c.req.raw.signal,
 		headers: {
 			"x-match-id": matchIdResult.data,
+			"x-request-id": c.get("requestId"),
 		},
 	});
 });
@@ -511,10 +514,24 @@ app.get("/v1/leaderboard", async (c) => {
 
 app.get("/v1/live", async (c) => {
 	const stub = getMatchmakerStub(c);
-	return doFetchWithRetry(stub, "https://do/live");
+	return doFetchWithRetry(stub, "https://do/live", {
+		headers: {
+			"x-request-id": c.get("requestId"),
+		},
+	});
 });
 
-export { MatchDO } from "./do/MatchDO";
-export { MatchmakerDO } from "./do/MatchmakerDO";
+// Type assertions needed because Sentry wrapper expects exact SentryEnv,
+// but our DO envs extend it with additional bindings (DB, MATCH, etc.)
+export const MatchDO = Sentry.instrumentDurableObjectWithSentry(
+	sentryOptions,
+	// biome-ignore lint/suspicious/noExplicitAny: Sentry wrapper type mismatch
+	MatchDOBase as any,
+);
+export const MatchmakerDO = Sentry.instrumentDurableObjectWithSentry(
+	sentryOptions,
+	// biome-ignore lint/suspicious/noExplicitAny: Sentry wrapper type mismatch
+	MatchmakerDOBase as any,
+);
 
-export default app;
+export default Sentry.withSentry(sentryOptions, app);

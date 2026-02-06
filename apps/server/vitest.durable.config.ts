@@ -36,6 +36,10 @@ export default defineWorkersConfig(async () => {
 							API_KEY_PEPPER: "test-pepper",
 							ADMIN_KEY: "test-admin",
 							INTERNAL_RUNNER_KEY: "test-runner",
+							PROMPT_ENCRYPTION_KEY:
+								"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+							SENTRY_DSN: "",
+							SENTRY_ENVIRONMENT: "test",
 							MATCHMAKING_ELO_RANGE: "200",
 							TURN_TIMEOUT_SECONDS: "60",
 							TEST_MODE: "true",
