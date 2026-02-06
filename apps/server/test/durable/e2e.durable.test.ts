@@ -6,27 +6,17 @@ import {
 	type Move,
 } from "@fightclaw/engine";
 import { beforeEach, expect, it } from "vitest";
-import { authHeader, createAgent, readSseText, resetDb } from "../helpers";
+import {
+	authHeader,
+	pollUntil,
+	readSseText,
+	resetDb,
+	setupMatch,
+} from "../helpers";
 
 beforeEach(async () => {
 	await resetDb();
 });
-
-const pollUntil = async <T>(
-	fn: () => Promise<T>,
-	predicate: (value: T) => boolean,
-	timeoutMs = 2000,
-	intervalMs = 50,
-): Promise<T> => {
-	const endAt = Date.now() + timeoutMs;
-	let last = await fn();
-	while (Date.now() < endAt) {
-		if (predicate(last)) return last;
-		await new Promise((resolve) => setTimeout(resolve, intervalMs));
-		last = await fn();
-	}
-	return last;
-};
 
 const pickMove = (moves: Move[]): Move => {
 	const move =
@@ -43,22 +33,7 @@ const pickMove = (moves: Move[]): Move => {
 type ApiState = { status: string; stateVersion: number; game: GameState };
 
 it("plays to completion and exposes live/snapshot/stream", async () => {
-	const agentA = await createAgent("Alpha", "alpha-key");
-	const agentB = await createAgent("Beta", "beta-key");
-
-	const first = await SELF.fetch("https://example.com/v1/matches/queue", {
-		method: "POST",
-		headers: authHeader(agentA.key),
-	});
-	const firstJson = (await first.json()) as { matchId: string };
-
-	const second = await SELF.fetch("https://example.com/v1/matches/queue", {
-		method: "POST",
-		headers: authHeader(agentB.key),
-	});
-	const secondJson = (await second.json()) as { matchId: string };
-
-	const matchId = secondJson.matchId ?? firstJson.matchId;
+	const { matchId, agentA, agentB } = await setupMatch();
 
 	const liveRes = await SELF.fetch("https://example.com/v1/live");
 	const liveJson = (await liveRes.json()) as { matchId?: string | null };

@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { currentPlayer, listLegalMoves } from "@fightclaw/engine";
 import { beforeEach, expect, it } from "vitest";
-import { authHeader, createAgent, resetDb } from "../helpers";
+import { resetDb, setupMatch } from "../helpers";
 
 beforeEach(async () => {
 	await resetDb();
@@ -29,22 +29,7 @@ it("requires runner key for internal move", async () => {
 });
 
 it("accepts runner key + agent id", async () => {
-	const agentA = await createAgent("Alpha", "alpha-key");
-	const agentB = await createAgent("Beta", "beta-key");
-
-	const first = await SELF.fetch("https://example.com/v1/matches/queue", {
-		method: "POST",
-		headers: authHeader(agentA.key),
-	});
-	const firstJson = (await first.json()) as { matchId: string };
-
-	const second = await SELF.fetch("https://example.com/v1/matches/queue", {
-		method: "POST",
-		headers: authHeader(agentB.key),
-	});
-	const secondJson = (await second.json()) as { matchId: string };
-
-	const matchId = secondJson.matchId ?? firstJson.matchId;
+	const { matchId, agentA, agentB } = await setupMatch();
 	const stateRes = await SELF.fetch(
 		`https://example.com/v1/matches/${matchId}/state`,
 	);

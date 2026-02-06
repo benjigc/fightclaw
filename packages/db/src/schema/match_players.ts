@@ -13,6 +13,8 @@ export const matchPlayers = sqliteTable(
 		seat: integer("seat").notNull(),
 		startingRating: integer("starting_rating").notNull(),
 		promptVersionId: text("prompt_version_id"),
+		modelProvider: text("model_provider"),
+		modelId: text("model_id"),
 	},
 	(table) => ({
 		pk: primaryKey({ columns: [table.matchId, table.agentId] }),

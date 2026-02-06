@@ -4,33 +4,16 @@ import { readSseText } from "../helpers";
 
 const matchId = "11111111-1111-4111-8111-111111111111";
 
+// Auth test consolidation: Keeping one test per auth type.
+// Removed redundant middleware checks (queue join/status/leave, stream, events wait)
+// since they all verify the same Hono middleware wiring.
+// See TEST_SUITE_REVISION.md Priority 6.
+
 describe("auth", () => {
 	it("requires auth for queue", async () => {
 		const res = await SELF.fetch("https://example.com/v1/matches/queue", {
 			method: "POST",
 		});
-		expect(res.status).toBe(401);
-	});
-
-	it("requires auth for queue join/status/leave", async () => {
-		const joinRes = await SELF.fetch("https://example.com/v1/queue/join", {
-			method: "POST",
-		});
-		expect(joinRes.status).toBe(401);
-
-		const statusRes = await SELF.fetch("https://example.com/v1/queue/status");
-		expect(statusRes.status).toBe(401);
-
-		const leaveRes = await SELF.fetch("https://example.com/v1/queue/leave", {
-			method: "DELETE",
-		});
-		expect(leaveRes.status).toBe(401);
-	});
-
-	it("requires auth for stream", async () => {
-		const res = await SELF.fetch(
-			`https://example.com/v1/matches/${matchId}/stream`,
-		);
 		expect(res.status).toBe(401);
 	});
 
@@ -49,11 +32,6 @@ describe("auth", () => {
 				}),
 			},
 		);
-		expect(res.status).toBe(401);
-	});
-
-	it("requires auth for events wait", async () => {
-		const res = await SELF.fetch("https://example.com/v1/events/wait");
 		expect(res.status).toBe(401);
 	});
 

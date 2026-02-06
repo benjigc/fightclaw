@@ -1,29 +1,6 @@
 import { SELF } from "cloudflare:test";
 import { beforeEach, expect, it } from "vitest";
-import { authHeader, createAgent, resetDb } from "../helpers";
-
-const setupMatch = async () => {
-	const agentA = await createAgent("Alpha", "alpha-key");
-	const agentB = await createAgent("Beta", "beta-key");
-
-	const first = await SELF.fetch("https://example.com/v1/matches/queue", {
-		method: "POST",
-		headers: authHeader(agentA.key),
-	});
-	const firstJson = (await first.json()) as { matchId: string };
-
-	const second = await SELF.fetch("https://example.com/v1/matches/queue", {
-		method: "POST",
-		headers: authHeader(agentB.key),
-	});
-	const secondJson = (await second.json()) as { matchId: string };
-
-	return {
-		matchId: secondJson.matchId ?? firstJson.matchId,
-		agentA,
-		agentB,
-	};
-};
+import { authHeader, resetDb, setupMatch } from "../helpers";
 
 beforeEach(async () => {
 	await resetDb();

@@ -10,6 +10,9 @@ import {
 	winner,
 } from "@fightclaw/engine";
 import { z } from "zod";
+import type { AppBindings } from "../appTypes";
+import { log } from "../obs/log";
+import { emitMetric } from "../obs/metrics";
 import {
 	buildGameEndedEvent,
 	buildStateEvent,
@@ -17,13 +20,16 @@ import {
 } from "../protocol/events";
 import { formatSse } from "../protocol/sse";
 
-type MatchEnv = {
-	DB: D1Database;
-	MATCHMAKER: DurableObjectNamespace;
-	INTERNAL_RUNNER_KEY?: string;
-	TURN_TIMEOUT_SECONDS?: string;
-	TEST_MODE?: string;
-};
+type MatchEnv = Pick<
+	AppBindings,
+	| "DB"
+	| "MATCHMAKER"
+	| "INTERNAL_RUNNER_KEY"
+	| "TURN_TIMEOUT_SECONDS"
+	| "TEST_MODE"
+	| "OBS"
+	| "SENTRY_ENVIRONMENT"
+>;
 
 type MatchState = {
 	stateVersion: number;
@@ -93,6 +99,68 @@ const initPayloadSchema = z
 		seed: z.number().int().optional(),
 	})
 	.strict();
+
+type RunnerTelemetry = {
+	requestId: string;
+	modelProvider: string | null;
+	modelId: string | null;
+	promptVersionId: string | null;
+	inferenceMs: number | null;
+	tokensIn: number | null;
+	tokensOut: number | null;
+};
+
+const sanitizeHeaderText = (value: string | null, max = 120) => {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (!trimmed) return null;
+	return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+};
+
+const parseHeaderInt = (value: string | null) => {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (!trimmed) return null;
+	const parsed = Number.parseInt(trimmed, 10);
+	if (!Number.isFinite(parsed) || parsed < 0) return null;
+	return parsed;
+};
+
+const extractRunnerTelemetry = (headers: Headers): RunnerTelemetry | null => {
+	const modelProvider = sanitizeHeaderText(
+		headers.get("x-fc-model-provider"),
+		80,
+	);
+	const modelId = sanitizeHeaderText(headers.get("x-fc-model-id"), 120);
+	const promptVersionId = sanitizeHeaderText(
+		headers.get("x-fc-prompt-version-id"),
+		80,
+	);
+	const inferenceMs = parseHeaderInt(headers.get("x-fc-inference-ms"));
+	const tokensIn = parseHeaderInt(headers.get("x-fc-tokens-in"));
+	const tokensOut = parseHeaderInt(headers.get("x-fc-tokens-out"));
+
+	if (
+		!modelProvider &&
+		!modelId &&
+		!promptVersionId &&
+		inferenceMs === null &&
+		tokensIn === null &&
+		tokensOut === null
+	) {
+		return null;
+	}
+
+	return {
+		requestId: headers.get("x-request-id") ?? crypto.randomUUID(),
+		modelProvider,
+		modelId,
+		promptVersionId,
+		inferenceMs,
+		tokensIn,
+		tokensOut,
+	};
+};
 
 export class MatchDO extends DurableObject<MatchEnv> {
 	private readonly encoder = new TextEncoder();
@@ -179,6 +247,126 @@ export class MatchDO extends DurableObject<MatchEnv> {
 		return nextState;
 	}
 
+	private async persistRunnerTelemetry(
+		agentId: string,
+		telemetry: RunnerTelemetry,
+	) {
+		const matchId = await this.resolveMatchId();
+		if (!matchId) return;
+
+		const promptVersionId = telemetry.promptVersionId
+			? z.string().uuid().safeParse(telemetry.promptVersionId).success
+				? telemetry.promptVersionId
+				: null
+			: null;
+
+		try {
+			const existing = await this.env.DB.prepare(
+				"SELECT prompt_version_id, model_provider, model_id FROM match_players WHERE match_id = ? AND agent_id = ? LIMIT 1",
+			)
+				.bind(matchId, agentId)
+				.first<{
+					prompt_version_id: string | null;
+					model_provider: string | null;
+					model_id: string | null;
+				}>();
+			if (!existing) return;
+
+			if (
+				promptVersionId &&
+				existing.prompt_version_id &&
+				existing.prompt_version_id !== promptVersionId
+			) {
+				log("warn", "runner_prompt_version_mismatch", {
+					requestId: telemetry.requestId,
+					matchId,
+					agentId,
+					existingPromptVersionId: existing.prompt_version_id,
+					providedPromptVersionId: promptVersionId,
+				});
+			}
+
+			const setPromptVersionId = existing.prompt_version_id
+				? null
+				: promptVersionId;
+			const setModelProvider = existing.model_provider
+				? null
+				: telemetry.modelProvider;
+			const setModelId = existing.model_id ? null : telemetry.modelId;
+
+			if (setPromptVersionId || setModelProvider || setModelId) {
+				await this.env.DB.prepare(
+					[
+						"UPDATE match_players",
+						"SET",
+						"prompt_version_id = COALESCE(prompt_version_id, ?),",
+						"model_provider = COALESCE(model_provider, ?),",
+						"model_id = COALESCE(model_id, ?)",
+						"WHERE match_id = ? AND agent_id = ?",
+					].join(" "),
+				)
+					.bind(
+						setPromptVersionId,
+						setModelProvider,
+						setModelId,
+						matchId,
+						agentId,
+					)
+					.run();
+			}
+
+			if (promptVersionId) {
+				emitMetric(this.env, "prompt_version_attached", {
+					scope: "match_do",
+					requestId: telemetry.requestId,
+					matchId,
+					agentId,
+					promptVersionId,
+				});
+			}
+
+			if (telemetry.modelProvider || telemetry.modelId) {
+				emitMetric(this.env, "agent_model_seen", {
+					scope: "match_do",
+					requestId: telemetry.requestId,
+					matchId,
+					agentId,
+					promptVersionId: promptVersionId ?? undefined,
+					modelProvider: telemetry.modelProvider ?? undefined,
+					modelId: telemetry.modelId ?? undefined,
+				});
+			}
+
+			if (
+				telemetry.inferenceMs !== null ||
+				telemetry.tokensIn !== null ||
+				telemetry.tokensOut !== null
+			) {
+				emitMetric(this.env, "agent_inference", {
+					scope: "match_do",
+					requestId: telemetry.requestId,
+					matchId,
+					agentId,
+					promptVersionId: promptVersionId ?? undefined,
+					modelProvider: telemetry.modelProvider ?? undefined,
+					modelId: telemetry.modelId ?? undefined,
+					doubles: [
+						telemetry.inferenceMs ?? 0,
+						telemetry.tokensIn ?? 0,
+						telemetry.tokensOut ?? 0,
+					],
+				});
+			}
+		} catch (error) {
+			log("warn", "runner_telemetry_persist_failed", {
+				requestId: telemetry.requestId,
+				matchId,
+				agentId,
+				error: (error as Error).message ?? String(error),
+			});
+		}
+	}
+
 	async fetch(request: Request): Promise<Response> {
 		const headerMatchId = request.headers.get("x-match-id");
 		if (!this.matchId) {
@@ -217,6 +405,16 @@ export class MatchDO extends DurableObject<MatchEnv> {
 				players: nextState.players,
 				seed,
 			});
+
+			// Emit match_started metric
+			const matchIdForMetric = this.matchId ?? this.ctx.id.name;
+			if (matchIdForMetric) {
+				emitMetric(this.env, "match_started", {
+					scope: "match_do",
+					matchId: matchIdForMetric,
+				});
+			}
+
 			await this.broadcastState(nextState);
 			this.broadcastYourTurn(nextState);
 			return Response.json({ ok: true, state: nextState });
@@ -241,6 +439,11 @@ export class MatchDO extends DurableObject<MatchEnv> {
 					{ ok: false, error: "Agent id is required." },
 					{ status: 400 },
 				);
+			}
+
+			const telemetry = extractRunnerTelemetry(request.headers);
+			if (telemetry) {
+				this.ctx.waitUntil(this.persistRunnerTelemetry(agentId, telemetry));
 			}
 
 			const idempotencyKey = `${IDEMPOTENCY_PREFIX}${body.moveId}`;
@@ -790,6 +993,18 @@ export class MatchDO extends DurableObject<MatchEnv> {
 			loserAgentId,
 		};
 
+		if (reason === "turn_timeout") {
+			const matchId = await this.resolveMatchId();
+			if (matchId) {
+				emitMetric(this.env, "turn_timeout_forfeit", {
+					scope: "match_do",
+					requestId: crypto.randomUUID(),
+					matchId,
+					agentId: loserAgentId,
+				});
+			}
+		}
+
 		await this.ctx.storage.put("state", nextState);
 		await this.broadcastState(nextState);
 		await this.broadcastGameEnd(nextState, reason);
@@ -969,6 +1184,16 @@ export class MatchDO extends DurableObject<MatchEnv> {
 	}
 
 	private async finalizeMatch(state: MatchState, reason: string) {
+		// Emit match_ended metric with reason
+		const matchId = await this.resolveMatchId();
+		if (matchId) {
+			emitMetric(this.env, "match_ended", {
+				scope: "match_do",
+				matchId,
+				agentId: state.winnerAgentId,
+			});
+		}
+
 		const task = this.persistFinalization(state, reason);
 		if (this.env.TEST_MODE) {
 			await task;

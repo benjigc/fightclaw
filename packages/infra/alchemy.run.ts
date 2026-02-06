@@ -1,8 +1,10 @@
 import alchemy from "alchemy";
 import {
+	AnalyticsEngineDataset,
 	D1Database,
 	DurableObjectNamespace,
 	RateLimit,
+	VersionMetadata,
 	Worker,
 } from "alchemy/cloudflare";
 import { config } from "dotenv";
@@ -42,16 +44,32 @@ const readLimit = RateLimit({
 	},
 });
 
+const obs = AnalyticsEngineDataset("obs", {
+	dataset: "FIGHTCLAW_METRICS",
+});
+
+const versionMetadata = VersionMetadata();
+
 export const server = await Worker("server", {
 	cwd: "../../apps/server",
 	entrypoint: "src/index.ts",
 	compatibility: "node",
 	bindings: {
 		DB: db,
-		CORS_ORIGIN: alchemy.env.CORS_ORIGIN!,
-		API_KEY_PEPPER: alchemy.secret(process.env.API_KEY_PEPPER!),
-		ADMIN_KEY: alchemy.secret(process.env.ADMIN_KEY!),
+		CORS_ORIGIN: alchemy.env.CORS_ORIGIN ?? "",
+		API_KEY_PEPPER: alchemy.secret(process.env.API_KEY_PEPPER ?? ""),
+		ADMIN_KEY: alchemy.secret(process.env.ADMIN_KEY ?? ""),
 		INTERNAL_RUNNER_KEY: alchemy.secret(process.env.INTERNAL_RUNNER_KEY ?? ""),
+		PROMPT_ENCRYPTION_KEY: alchemy.secret(
+			process.env.PROMPT_ENCRYPTION_KEY ?? "",
+		),
+		SENTRY_DSN: alchemy.secret(process.env.SENTRY_DSN ?? ""),
+		SENTRY_ENVIRONMENT: app.stage,
+		SENTRY_TRACES_SAMPLE_RATE:
+			process.env.SENTRY_TRACES_SAMPLE_RATE ??
+			(app.stage === "production" ? "0.1" : "1.0"),
+		CF_VERSION_METADATA: versionMetadata,
+		OBS: obs,
 		MATCHMAKER: matchmaker,
 		MATCH: match,
 		MOVE_SUBMIT_LIMIT: moveSubmitLimit,
