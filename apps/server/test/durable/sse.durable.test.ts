@@ -77,6 +77,16 @@ it(
 		);
 
 		try {
+			// Begin consuming the SSE stream before applying the move so DO writes don't
+			// backpressure and hit the SSE write timeout.
+			const waitForEngineEvents = readSseUntil(
+				stream.res,
+				(value) => value.includes("event: engine_events"),
+				SSE_TIMEOUT_MS,
+				SSE_MAX_BYTES,
+				{ throwOnTimeout: true, label: "engine_events" },
+			);
+
 			const stateRes = await SELF.fetch(
 				`https://example.com/v1/matches/${matchId}/state`,
 			);
@@ -98,13 +108,7 @@ it(
 				}),
 			});
 
-			const result = await readSseUntil(
-				stream.res,
-				(value) => value.includes("event: engine_events"),
-				SSE_TIMEOUT_MS,
-				SSE_MAX_BYTES,
-				{ throwOnTimeout: true, label: "engine_events" },
-			);
+			const result = await waitForEngineEvents;
 
 			const frame =
 				result.framesPreview.find((value) =>
