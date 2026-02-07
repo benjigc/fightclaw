@@ -6,6 +6,9 @@
 	"scripts": {
 		"sim:single": "tsx src/cli.ts single --seed 1 --maxTurns 200 --verbose",
 		"sim:tourney": "tsx src/cli.ts tourney --games 200 --seed 1 --maxTurns 200",
+		"sim:mass": "tsx src/cli.ts mass --output ./results",
+		"sim:analyze": "tsx src/cli.ts analyze --input ./results",
+		"sim:dashboard": "tsx src/cli.ts dashboard --input ./results",
 		"test": "bun test"
 	},
 	"dependencies": {
@@ -14,8 +17,9 @@
 		"zod": "^3.24.1"
 	},
 	"devDependencies": {
+		"@types/minimist": "^1.2.5",
+		"@types/node": "^22.13.1",
 		"tsx": "^4.19.2",
-		"typescript": "^5.5.4",
-		"@types/node": "^22.13.1"
+		"typescript": "^5.5.4"
 	}
 }

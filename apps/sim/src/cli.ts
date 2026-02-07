@@ -1,11 +1,46 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import * as path from "node:path";
 import minimist from "minimist";
+import { StatisticalAnalyzer } from "./analysis/statisticalAnomalyDetector";
+import { makeAggressiveBot } from "./bots/aggressiveBot";
 import { makeGreedyBot } from "./bots/greedyBot";
+import { makeMockLlmBot } from "./bots/mockLlmBot";
 import { makeRandomLegalBot } from "./bots/randomBot";
 import { playMatch, replayMatch } from "./match";
+import type { DashboardData } from "./reporting/dashboardGenerator";
+import { generateDashboard } from "./reporting/dashboardGenerator";
+import { runMassSimulation } from "./runner/massRunner";
+import type { SimulationStats } from "./simulation/config";
+import { createSimulationOptions } from "./simulation/config";
 import { runTournament } from "./tournament";
+import type { Bot } from "./types";
 
 type Args = ReturnType<typeof minimist>;
+
+type BotType = "random" | "greedy" | "aggressive" | "mockllm";
+
+function makeBot(
+	id: string,
+	type: BotType,
+	prompt?: string,
+	strategy?: string,
+): Bot {
+	switch (type) {
+		case "greedy":
+			return makeGreedyBot(id);
+		case "aggressive":
+			return makeAggressiveBot(id);
+		case "mockllm":
+			return makeMockLlmBot(id, {
+				strategy:
+					(strategy as "aggressive" | "defensive" | "random" | "strategic") ??
+					"strategic",
+				inline: prompt,
+			});
+		default:
+			return makeRandomLegalBot(id);
+	}
+}
 
 async function main() {
 	const argv: Args = minimist(process.argv.slice(2));
@@ -17,10 +52,25 @@ async function main() {
 	const log = !!argv.log;
 	const logFile = typeof argv.logFile === "string" ? argv.logFile : undefined;
 	const autofix = !!argv.autofix;
+	const output = typeof argv.output === "string" ? argv.output : "./results";
+	const quiet = !!argv.quiet;
+	const json = !!argv.json;
 
-	// Player ids must match what your engine expects.
-	const p1 = makeGreedyBot("P1");
-	const p2 = makeRandomLegalBot("P2");
+	const bot1Type = (
+		typeof argv.bot1 === "string" ? argv.bot1 : "greedy"
+	) as BotType;
+	const bot2Type = (
+		typeof argv.bot2 === "string" ? argv.bot2 : "random"
+	) as BotType;
+	const prompt1 = typeof argv.prompt1 === "string" ? argv.prompt1 : undefined;
+	const prompt2 = typeof argv.prompt2 === "string" ? argv.prompt2 : undefined;
+	const strategy1 =
+		typeof argv.strategy1 === "string" ? argv.strategy1 : undefined;
+	const strategy2 =
+		typeof argv.strategy2 === "string" ? argv.strategy2 : undefined;
+
+	const p1 = makeBot("P1", bot1Type, prompt1, strategy1);
+	const p2 = makeBot("P2", bot2Type, prompt2, strategy2);
 
 	if (cmd === "single") {
 		const result = await playMatch({
@@ -69,6 +119,138 @@ async function main() {
 		return;
 	}
 
+	if (cmd === "mass") {
+		const games = num(argv.games, 10000);
+		const parallel = num(argv.parallel, 4);
+
+		const options = createSimulationOptions({
+			games,
+			maxTurns,
+			parallelism: parallel,
+			seed,
+			outputDir: output,
+		});
+
+		if (!quiet) {
+			console.log(`Starting mass simulation: ${games} games...`);
+			console.log(`Parallel workers: ${parallel}`);
+			console.log(`Output directory: ${output}`);
+		}
+
+		const startTime = Date.now();
+		const stats = await runMassSimulation(options, [p1, p2]);
+		const duration = (Date.now() - startTime) / 1000;
+
+		if (!quiet) {
+			console.log(`\nCompleted in ${duration.toFixed(1)}s`);
+			console.log(`Games: ${stats.totalGames}`);
+			console.log(`Avg turns: ${stats.matchLengths.mean.toFixed(1)}`);
+			console.log(`Anomalies: ${stats.totalAnomalies}`);
+		}
+
+		if (json) {
+			console.log(JSON.stringify(stats, null, 2));
+		}
+		return;
+	}
+
+	if (cmd === "analyze") {
+		const inputDir = typeof argv.input === "string" ? argv.input : output;
+
+		if (!existsSync(inputDir)) {
+			console.error(`Input directory not found: ${inputDir}`);
+			process.exit(1);
+		}
+
+		const summaryPath = path.join(inputDir, "summary.json");
+		if (!existsSync(summaryPath)) {
+			console.error(`Summary file not found: ${summaryPath}`);
+			console.error("Run 'mass' command first to generate results.");
+			process.exit(1);
+		}
+
+		const stats: SimulationStats = JSON.parse(
+			readFileSync(summaryPath, "utf-8"),
+		);
+
+		const analyzer = new StatisticalAnalyzer();
+		const lengthStats = analyzer.computeLengthStats(
+			stats.matchLengths.outliers,
+		);
+
+		if (!quiet) {
+			console.log("=== SIMULATION ANALYSIS ===\n");
+			console.log(`Total Games: ${stats.totalGames}`);
+			console.log(`Completed: ${stats.completedGames}`);
+			console.log(`Draws: ${stats.draws}`);
+			console.log("\nMatch Lengths:");
+			console.log(`  Mean: ${stats.matchLengths.mean.toFixed(1)}`);
+			console.log(`  Median: ${stats.matchLengths.median}`);
+			console.log(
+				`  Min: ${stats.matchLengths.min}, Max: ${stats.matchLengths.max}`,
+			);
+			console.log("\nWin Rates:");
+			for (const [player, winRate] of Object.entries(stats.winRates)) {
+				console.log(
+					`  ${player}: ${(winRate.rate * 100).toFixed(1)}% (${winRate.wins}/${winRate.total})`,
+				);
+			}
+			console.log(`\nAnomalies: ${stats.totalAnomalies}`);
+			if (lengthStats.outliers.length > 0) {
+				console.log(`  Match length outliers: ${lengthStats.outliers.length}`);
+			}
+		}
+
+		if (json) {
+			console.log(JSON.stringify({ stats, lengthStats }, null, 2));
+		}
+		return;
+	}
+
+	if (cmd === "dashboard") {
+		const inputDir = typeof argv.input === "string" ? argv.input : output;
+		const dashboardOutput =
+			typeof argv.output === "string"
+				? argv.output
+				: path.join(inputDir, "dashboard.html");
+
+		if (!existsSync(inputDir)) {
+			console.error(`Input directory not found: ${inputDir}`);
+			process.exit(1);
+		}
+
+		const summaryPath = path.join(inputDir, "summary.json");
+		if (!existsSync(summaryPath)) {
+			console.error(`Summary file not found: ${summaryPath}`);
+			process.exit(1);
+		}
+
+		const stats: SimulationStats = JSON.parse(
+			readFileSync(summaryPath, "utf-8"),
+		);
+
+		const dashboardData: DashboardData = {
+			summary: {
+				totalGames: stats.totalGames,
+				completedGames: stats.completedGames,
+				draws: stats.draws,
+				avgTurns: stats.matchLengths.mean,
+				totalAnomalies: stats.totalAnomalies,
+			},
+			winRates: stats.winRates,
+			strategyDistribution: stats.strategyDistribution,
+			anomalies: [],
+			matchLengths: stats.matchLengths,
+		};
+
+		generateDashboard(dashboardData, dashboardOutput);
+
+		if (!quiet) {
+			console.log(`Dashboard generated: ${dashboardOutput}`);
+		}
+		return;
+	}
+
 	console.error("Usage:");
 	console.error(
 		"  tsx src/cli.ts single  --seed 1 --maxTurns 200 --verbose --log --logFile ./match.json",
@@ -77,6 +259,33 @@ async function main() {
 	console.error("  tsx src/cli.ts replay  --logFile ./match.json");
 	console.error(
 		"  tsx src/cli.ts tourney --games 200 --seed 1 --maxTurns 200 --autofix",
+	);
+	console.error(
+		"  tsx src/cli.ts mass    --games 10000 --parallel 4 --output ./results",
+	);
+	console.error("  tsx src/cli.ts analyze --input ./results [--json]");
+	console.error(
+		"  tsx src/cli.ts dashboard --input ./results --output ./dashboard.html",
+	);
+	console.error("");
+	console.error("Bot options (for single, tourney, mass):");
+	console.error(
+		"  --bot1 TYPE    P1 bot type: random, greedy, aggressive, mockllm (default: greedy)",
+	);
+	console.error(
+		"  --bot2 TYPE    P2 bot type: random, greedy, aggressive, mockllm (default: random)",
+	);
+	console.error(
+		'  --prompt1 TXT  Inline prompt for P1 mockllm bot (e.g., "Always attack first")',
+	);
+	console.error(
+		'  --prompt2 TXT  Inline prompt for P2 mockllm bot (e.g., "Defend and recruit")',
+	);
+	console.error(
+		"  --strategy1 S  MockLLM strategy: aggressive, defensive, random, strategic",
+	);
+	console.error(
+		"  --strategy2 S  MockLLM strategy: aggressive, defensive, random, strategic",
 	);
 	process.exit(1);
 }

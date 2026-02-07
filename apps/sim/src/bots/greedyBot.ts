@@ -1,13 +1,20 @@
 import { pickOne } from "../rng";
 import type { Bot, Move } from "../types";
 
-/**
- * Greedy-ish bot stub.
- * Once your Move shape is known (e.g. { action: "move" | "attack" | "recruit" | "fortify" | "pass", ... }),
- * update scoreMove() to prefer certain actions.
- */
-function scoreMove(_m: Move): number {
-	return 0; // TODO: customize
+function scoreMove(m: Move): number {
+	switch (m.action) {
+		case "attack":
+			return 10;
+		case "recruit":
+			return 7;
+		case "move":
+			return 3;
+		case "fortify":
+			return 2;
+		case "end_turn":
+		case "pass":
+			return 0;
+	}
 }
 
 export function makeGreedyBot(id: string): Bot {

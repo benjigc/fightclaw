@@ -29,7 +29,7 @@ describe("engine", () => {
 	test("turn order enforcement via currentPlayer", () => {
 		let state = createInitialState(1, undefined, [...players]);
 		const first = currentPlayer(state);
-		const result = applyMove(state, { action: "pass" });
+		const result = applyMove(state, { action: "end_turn" });
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		state = result.state;
@@ -37,17 +37,17 @@ describe("engine", () => {
 		expect(second).not.toBe(first);
 	});
 
-	test("listLegalMoves includes pass", () => {
+	test("listLegalMoves includes end_turn", () => {
 		const state = createInitialState(1, undefined, [...players]);
 		const legal = listLegalMoves(state).map((m) => m.action);
-		expect(legal).toContain("pass");
+		expect(legal).toContain("end_turn");
 	});
 
 	test("determinism with same seed", () => {
 		const moves: Move[] = [
-			{ action: "pass" },
-			{ action: "pass" },
-			{ action: "pass" },
+			{ action: "end_turn" },
+			{ action: "end_turn" },
+			{ action: "end_turn" },
 		];
 		const a = applyMoves(42, moves);
 		const b = applyMoves(42, moves);

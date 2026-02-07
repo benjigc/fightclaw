@@ -23,6 +23,7 @@ export async function playMatch(opts: {
 	if (playerIds.length !== 2) {
 		throw new Error("playMatch requires exactly two players.");
 	}
+	// biome-ignore lint/style/noNonNullAssertion: length checked above
 	const playerPair: [AgentId, AgentId] = [playerIds[0]!, playerIds[1]!];
 
 	let state: MatchState = Engine.createInitialState(opts.seed, playerIds);
@@ -90,9 +91,6 @@ export async function playMatch(opts: {
 		const isLegal = legalMoves.some((m) => safeJson(m) === safeJson(move));
 		if (!isLegal) {
 			illegalMoves++;
-			const rejection = Engine.applyMove(state, move);
-			engineEvents.push(...rejection.engineEvents);
-			moves.push(move);
 			if (!opts.autofixIllegal) {
 				if (opts.verbose)
 					console.warn(`[turn ${turn}] bot ${bot.name} chose illegal move`);
