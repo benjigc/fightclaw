@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Simulation Dashboard</title>
+	<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+	<style>
+		:root {
+			--bg-primary: #ffffff;
+			--bg-secondary: #f5f5f5;
+			--bg-card: #ffffff;
+			--text-primary: #1a1a1a;
+			--text-secondary: #666666;
+			--border-color: #e0e0e0;
+			--accent-primary: #3b82f6;
+			--accent-secondary: #10b981;
+			--accent-warning: #f59e0b;
+			--accent-danger: #ef4444;
+		}
+
+		[data-theme="dark"] {
+			--bg-primary: #0f0f0f;
+			--bg-secondary: #1a1a1a;
+			--bg-card: #242424;
+			--text-primary: #ffffff;
+			--text-secondary: #a0a0a0;
+			--border-color: #333333;
+			--accent-primary: #60a5fa;
+			--accent-secondary: #34d399;
+			--accent-warning: #fbbf24;
+			--accent-danger: #f87171;
+		}
+
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+			background: var(--bg-primary);
+			color: var(--text-primary);
+			line-height: 1.6;
+			transition: background 0.3s, color 0.3s;
+		}
+
+		.container {
+			max-width: 1400px;
+			margin: 0 auto;
+			padding: 2rem;
+		}
+
+		header {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			margin-bottom: 2rem;
+			padding-bottom: 1rem;
+			border-bottom: 1px solid var(--border-color);
+		}
+
+		h1 {
+			font-size: 2rem;
+			font-weight: 700;
+		}
+
+		.controls {
+			display: flex;
+			gap: 1rem;
+			align-items: center;
+		}
+
+		button {
+			padding: 0.5rem 1rem;
+			border: 1px solid var(--border-color);
+			background: var(--bg-card);
+			color: var(--text-primary);
+			border-radius: 0.375rem;
+			cursor: pointer;
+			font-size: 0.875rem;
+			transition: all 0.2s;
+		}
+
+		button:hover {
+			background: var(--bg-secondary);
+		}
+
+		.stats-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+			gap: 1.5rem;
+			margin-bottom: 2rem;
+		}
+
+		.stat-card {
+			background: var(--bg-card);
+			border: 1px solid var(--border-color);
+			border-radius: 0.5rem;
+			padding: 1.5rem;
+			transition: transform 0.2s, box-shadow 0.2s;
+		}
+
+		.stat-card:hover {
+			transform: translateY(-2px);
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+		}
+
+		.stat-label {
+			font-size: 0.875rem;
+			color: var(--text-secondary);
+			text-transform: uppercase;
+			letter-spacing: 0.05em;
+			margin-bottom: 0.5rem;
+		}
+
+		.stat-value {
+			font-size: 2.5rem;
+			font-weight: 700;
+			color: var(--accent-primary);
+		}
+
+		.stat-subtitle {
+			font-size: 0.875rem;
+			color: var(--text-secondary);
+			margin-top: 0.25rem;
+		}
+
+		.charts-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+			gap: 1.5rem;
+			margin-bottom: 2rem;
+		}
+
+		.chart-card {
+			background: var(--bg-card);
+			border: 1px solid var(--border-color);
+			border-radius: 0.5rem;
+			padding: 1.5rem;
+		}
+
+		.chart-title {
+			font-size: 1.125rem;
+			font-weight: 600;
+			margin-bottom: 1rem;
+		}
+
+		.chart-container {
+			position: relative;
+			height: 300px;
+		}
+
+		.anomaly-list {
+			background: var(--bg-card);
+			border: 1px solid var(--border-color);
+			border-radius: 0.5rem;
+			padding: 1.5rem;
+			max-height: 400px;
+			overflow-y: auto;
+		}
+
+		.anomaly-item {
+			padding: 1rem;
+			border-bottom: 1px solid var(--border-color);
+			display: flex;
+			align-items: flex-start;
+			gap: 1rem;
+		}
+
+		.anomaly-item:last-child {
+			border-bottom: none;
+		}
+
+		.anomaly-severity {
+			padding: 0.25rem 0.5rem;
+			border-radius: 0.25rem;
+			font-size: 0.75rem;
+			font-weight: 600;
+			text-transform: uppercase;
+		}
+
+		.severity-info {
+			background: var(--accent-primary);
+			color: white;
+		}
+
+		.severity-warn {
+			background: var(--accent-warning);
+			color: white;
+		}
+
+		.severity-critical {
+			background: var(--accent-danger);
+			color: white;
+		}
+
+		.anomaly-content {
+			flex: 1;
+		}
+
+		.anomaly-type {
+			font-weight: 600;
+			margin-bottom: 0.25rem;
+		}
+
+		.anomaly-desc {
+			font-size: 0.875rem;
+			color: var(--text-secondary);
+		}
+
+		.empty-state {
+			text-align: center;
+			padding: 3rem;
+			color: var(--text-secondary);
+		}
+
+		@media (max-width: 768px) {
+			.container {
+				padding: 1rem;
+			}
+
+			.charts-grid {
+				grid-template-columns: 1fr;
+			}
+
+			header {
+				flex-direction: column;
+				gap: 1rem;
+				align-items: flex-start;
+			}
+		}
+	</style>
+</head>
+<body>
+	<div class="container">
+		<header>
+			<h1>Simulation Dashboard</h1>
+			<div class="controls">
+				<button onclick="toggleTheme()">Toggle Theme</button>
+				<button onclick="exportCSV()">Export CSV</button>
+				<button onclick="exportJSON()">Export JSON</button>
+			</div>
+		</header>
+
+		<div class="stats-grid">
+			<div class="stat-card">
+				<div class="stat-label">Total Games</div>
+				<div class="stat-value">900</div>
+				<div class="stat-subtitle">900 completed</div>
+			</div>
+			<div class="stat-card">
+				<div class="stat-label">Draws</div>
+				<div class="stat-value" style="color: var(--accent-warning)">0</div>
+				<div class="stat-subtitle">0.0% of games</div>
+			</div>
+			<div class="stat-card">
+				<div class="stat-label">Avg Turns</div>
+				<div class="stat-value" style="color: var(--accent-secondary)">180.0</div>
+				<div class="stat-subtitle">per game</div>
+			</div>
+			<div class="stat-card">
+				<div class="stat-label">Anomalies</div>
+				<div class="stat-value" style="color: var(--accent-danger)">0</div>
+				<div class="stat-subtitle">detected</div>
+			</div>
+		</div>
+
+		<div class="charts-grid">
+			<div class="chart-card">
+				<div class="chart-title">Win Rates</div>
+				<div class="chart-container">
+					<canvas id="winRateChart"></canvas>
+				</div>
+			</div>
+			<div class="chart-card">
+				<div class="chart-title">Match Length Distribution</div>
+				<div class="chart-container">
+					<canvas id="lengthChart"></canvas>
+				</div>
+			</div>
+		</div>
+
+		<div class="chart-card" style="margin-bottom: 2rem;">
+			<div class="chart-title">Detected Anomalies</div>
+			<div class="anomaly-list" id="anomalyList">
+				<div class="empty-state">
+				<p>No anomalies detected.</p>
+			</div>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		const dashboardData = {"summary":{"totalGames":900,"completedGames":900,"draws":0,"avgTurns":180,"totalAnomalies":0},"winRates":{"P1":{"wins":607,"losses":293,"total":900,"rate":0.6744444444444444,"ci95Lower":0.64314510808649,"ci95Upper":0.704260897567598},"P2":{"wins":293,"losses":607,"total":900,"rate":0.32555555555555554,"ci95Lower":0.29573910243240187,"ci95Upper":0.35685489191350994}},"strategyDistribution":{"strategic":2},"anomalies":[],"matchLengths":{"min":180,"max":180,"mean":180,"median":180,"stdDev":0,"p25":180,"p75":180,"p95":180,"outliers":[]}};
+
+		function toggleTheme() {
+			const current = document.documentElement.getAttribute('data-theme');
+			const next = current === 'dark' ? 'light' : 'dark';
+			document.documentElement.setAttribute('data-theme', next);
+			localStorage.setItem('theme', next);
+		}
+
+		const savedTheme = localStorage.getItem('theme');
+		if (savedTheme) {
+			document.documentElement.setAttribute('data-theme', savedTheme);
+		}
+
+		function exportCSV() {
+			const rows = [
+				['Metric', 'Value'],
+				['Total Games', dashboardData.summary.totalGames],
+				['Completed Games', dashboardData.summary.completedGames],
+				['Draws', dashboardData.summary.draws],
+				['Avg Turns', dashboardData.summary.avgTurns],
+				['Total Anomalies', dashboardData.summary.totalAnomalies],
+			];
+
+			const csv = rows.map(row => row.join(',')).join('\n');
+			const blob = new Blob([csv], { type: 'text/csv' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = 'simulation-summary.csv';
+			a.click();
+		}
+
+		function exportJSON() {
+			const json = JSON.stringify(dashboardData, null, 2);
+			const blob = new Blob([json], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = 'simulation-data.json';
+			a.click();
+		}
+
+		Chart.defaults.color = getComputedStyle(document.body).color;
+		Chart.defaults.borderColor = getComputedStyle(document.body).getPropertyValue('--border-color');
+
+		const winRateCtx = document.getElementById('winRateChart').getContext('2d');
+		const winRateData = Object.entries(dashboardData.winRates);
+		new Chart(winRateCtx, {
+			type: 'bar',
+			data: {
+				labels: winRateData.map(([name]) => name),
+				datasets: [{
+					label: 'Win Rate',
+					data: winRateData.map(([, stats]) => stats.rate * 100),
+					backgroundColor: 'rgba(59, 130, 246, 0.5)',
+					borderColor: 'rgba(59, 130, 246, 1)',
+					borderWidth: 1
+				}]
+			},
+			options: {
+				responsive: true,
+				maintainAspectRatio: false,
+				scales: {
+					y: {
+						beginAtZero: true,
+						max: 100,
+						ticks: {
+							callback: function(value) {
+								return value + '%';
+							}
+						}
+					}
+				}
+			}
+		});
+
+		const lengthCtx = document.getElementById('lengthChart').getContext('2d');
+		new Chart(lengthCtx, {
+			type: 'line',
+			data: {
+				labels: ['Min', 'P25', 'Median', 'P75', 'Max', 'Mean'],
+				datasets: [{
+					label: 'Turns',
+					data: [
+						dashboardData.matchLengths.min,
+						dashboardData.matchLengths.p25,
+						dashboardData.matchLengths.median,
+						dashboardData.matchLengths.p75,
+						dashboardData.matchLengths.max,
+						dashboardData.matchLengths.mean
+					],
+					borderColor: 'rgba(16, 185, 129, 1)',
+					backgroundColor: 'rgba(16, 185, 129, 0.1)',
+					fill: true,
+					tension: 0.4
+				}]
+			},
+			options: {
+				responsive: true,
+				maintainAspectRatio: false,
+				scales: {
+					y: {
+						beginAtZero: true
+					}
+				}
+			}
+		});
+	</script>
+</body>
+</html>

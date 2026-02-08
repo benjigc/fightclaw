@@ -452,3 +452,18 @@
 .muted {
 	color: var(--spectator-muted);
 }
+
+.hex-board-container {
+	width: 100%;
+	display: flex;
+	justify-content: center;
+	overflow: hidden;
+}
+
+.hex-board-svg {
+	width: 100%;
+	max-height: 65vh;
+	user-select: none;
+	-webkit-font-smoothing: none;
+	-moz-osx-font-smoothing: unset;
+}

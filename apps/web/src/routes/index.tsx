@@ -9,12 +9,11 @@ import { env } from "@fightclaw/env/web";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { AsciiBoard } from "@/components/ascii-board";
-import { renderBoardGridWithWarnings } from "@/lib/hex-conquest";
+import { HexBoard } from "@/components/arena/hex-board";
 import {
 	type EngineEventsEnvelopeV1,
-	useSpectatorAnimator,
-} from "@/lib/spectator-animations";
+	useArenaAnimator,
+} from "@/lib/arena-animator";
 
 export const Route = createFileRoute("/")({
 	component: SpectatorLanding,
@@ -60,12 +59,10 @@ function SpectatorLanding() {
 
 	const [featured, setFeatured] = useState<FeaturedResponse | null>(null);
 	const [latestState, setLatestState] = useState<MatchState | null>(null);
-	const [latestAscii, setLatestAscii] = useState<string | null>(null);
 	const [eventLog, setEventLog] = useState<LogEntry[]>([]);
 	const [connectionStatus, setConnectionStatus] = useState<
 		"idle" | "connecting" | "live" | "replay" | "error"
 	>("idle");
-	const warningCache = useRef<Set<string>>(new Set());
 	const logSeq = useRef(0);
 	const replayFollowStarted = useRef(false);
 	const [replayShouldFollowLive, setReplayShouldFollowLive] = useState(false);
@@ -73,13 +70,14 @@ function SpectatorLanding() {
 	const matchId = replayMatchId ?? featured?.matchId ?? null;
 
 	const {
-		cellFx,
+		effects,
+		unitAnimStates,
+		dyingUnitIds,
 		hudFx,
 		isAnimating,
 		enqueue: enqueueEngineEvents,
 		reset: resetAnimator,
-		setIdleFocus,
-	} = useSpectatorAnimator({
+	} = useArenaAnimator({
 		onApplyBaseState: (state) => setLatestState(state),
 	});
 
@@ -126,21 +124,16 @@ function SpectatorLanding() {
 		if (!matchId) {
 			resetAnimator();
 			setLatestState(null);
-			setLatestAscii(null);
 			setEventLog([]);
 			setConnectionStatus("idle");
-			warningCache.current.clear();
 			return;
 		}
 
 		let active = true;
 		resetAnimator();
-		const hasBaseState = { current: false };
 		setLatestState(null);
-		setLatestAscii(null);
 		setEventLog([]);
 		setConnectionStatus("connecting");
-		warningCache.current.clear();
 
 		const fetchState = async () => {
 			try {
@@ -151,16 +144,11 @@ function SpectatorLanding() {
 					throw new Error(`State request failed (${res.status})`);
 				}
 				const json = (await res.json()) as { state?: unknown } | null;
-				const { state, ascii } = parseStateEnvelope(json);
+				const state = parseStateFromEnvelope(json);
 				if (!active) return;
 				if (state) {
 					setLatestState(state);
-					if (!hasBaseState.current) {
-						hasBaseState.current = true;
-						setIdleFocus(strongholdForSide(state.activePlayer));
-					}
 				}
-				setLatestAscii(ascii);
 			} catch (error) {
 				if (!active) return;
 				setEventLog((prev) =>
@@ -198,15 +186,10 @@ function SpectatorLanding() {
 			if (!payload || payload.eventVersion !== 1 || payload.event !== "state")
 				return;
 			if (!active) return;
-			const { state, ascii } = parseStateEnvelope(payload);
+			const state = parseStateFromEnvelope(payload);
 			if (!state) return;
 			setLatestState(state);
-			setLatestAscii(ascii);
 			setConnectionStatus("live");
-			if (!hasBaseState.current) {
-				hasBaseState.current = true;
-				setIdleFocus(strongholdForSide(state.activePlayer));
-			}
 			setEventLog((prev) =>
 				[
 					...prev,
@@ -298,13 +281,7 @@ function SpectatorLanding() {
 			active = false;
 			eventSource.close();
 		};
-	}, [
-		enqueueEngineEvents,
-		matchId,
-		replayMatchId,
-		resetAnimator,
-		setIdleFocus,
-	]);
+	}, [enqueueEngineEvents, matchId, replayMatchId, resetAnimator]);
 
 	useEffect(() => {
 		if (!replayMatchId) {
@@ -319,10 +296,8 @@ function SpectatorLanding() {
 		resetAnimator();
 		setFeatured({ matchId: replayMatchId, status: "replay", players: null });
 		setLatestState(null);
-		setLatestAscii(null);
 		setEventLog([]);
 		setConnectionStatus("connecting");
-		warningCache.current.clear();
 
 		const runReplay = async () => {
 			try {
@@ -365,7 +340,6 @@ function SpectatorLanding() {
 
 				let state = initialState(seed, players);
 				setLatestState(state);
-				setIdleFocus(strongholdForSide(state.activePlayer));
 				setConnectionStatus("replay");
 
 				const moveRows = json.events
@@ -464,7 +438,7 @@ function SpectatorLanding() {
 		return () => {
 			active = false;
 		};
-	}, [enqueueEngineEvents, replayMatchId, resetAnimator, setIdleFocus]);
+	}, [enqueueEngineEvents, replayMatchId, resetAnimator]);
 
 	useEffect(() => {
 		if (!replayMatchId) return;
@@ -489,10 +463,9 @@ function SpectatorLanding() {
 			if (!payload || payload.eventVersion !== 1 || payload.event !== "state")
 				return;
 			if (!active) return;
-			const { state, ascii } = parseStateEnvelope(payload);
+			const state = parseStateFromEnvelope(payload);
 			if (!state) return;
 			setLatestState(state);
-			setLatestAscii(ascii);
 			setConnectionStatus("live");
 		};
 
@@ -526,31 +499,6 @@ function SpectatorLanding() {
 		};
 	}, [enqueueEngineEvents, isAnimating, replayMatchId, replayShouldFollowLive]);
 
-	const boardGridResult = useMemo(() => {
-		if (!latestState) return null;
-		return renderBoardGridWithWarnings(latestState);
-	}, [latestState]);
-
-	useEffect(() => {
-		if (!boardGridResult?.warnings?.length) return;
-		const newWarnings = boardGridResult.warnings.filter(
-			(warning) => !warningCache.current.has(warning),
-		);
-		if (newWarnings.length === 0) return;
-		newWarnings.forEach((warning) => {
-			warningCache.current.add(warning);
-		});
-		setEventLog((prev) =>
-			[
-				...prev,
-				...newWarnings.map((warning) => ({
-					id: ++logSeq.current,
-					text: `WARN: ${warning}`,
-				})),
-			].slice(-12),
-		);
-	}, [boardGridResult]);
-
 	const statusLabel = featured?.status ?? "waiting";
 	const playersLabel = featured?.players?.length
 		? `A: ${featured.players[0] ?? "A"}  B: ${featured.players[1] ?? "B"}`
@@ -558,19 +506,11 @@ function SpectatorLanding() {
 
 	const controlCounts = useMemo(() => {
 		if (!latestState) return null;
-		const board = (latestState as { board?: unknown }).board;
-		const hexes = Array.isArray(board)
-			? board
-			: board && typeof board === "object"
-				? Object.values(board as Record<string, unknown>)
-				: [];
 		let a = 0;
 		let b = 0;
-		for (const hex of hexes) {
-			if (!hex || typeof hex !== "object") continue;
-			const controlledBy = (hex as { controlledBy?: unknown }).controlledBy;
-			if (controlledBy === "A") a += 1;
-			if (controlledBy === "B") b += 1;
+		for (const hex of latestState.board) {
+			if (hex.controlledBy === "A") a += 1;
+			if (hex.controlledBy === "B") b += 1;
 		}
 		return { A: a, B: b };
 	}, [latestState]);
@@ -649,30 +589,16 @@ function SpectatorLanding() {
 					<div className="spectator-panel board">
 						<div className="panel-title">ARENA MAP</div>
 						<div className="panel-body">
-							{boardGridResult &&
-							!boardGridResult.errorText &&
-							boardGridResult.grid.length ? (
-								<div className="ascii-board-shell">
-									<AsciiBoard
-										header={boardGridResult.header}
-										grid={boardGridResult.grid}
-										cellFx={cellFx}
-									/>
-								</div>
-							) : boardGridResult?.errorText ? (
-								<div className="muted">{boardGridResult.errorText}</div>
-							) : latestAscii && latestAscii.trim().length > 0 ? (
-								<div className="ascii-board-shell">
-									<pre className="ascii-board">{latestAscii}</pre>
-								</div>
+							{latestState ? (
+								<HexBoard
+									state={latestState}
+									effects={effects}
+									unitAnimStates={unitAnimStates}
+									dyingUnitIds={dyingUnitIds}
+								/>
 							) : (
 								<div className="muted">No board data yet.</div>
 							)}
-							<div className="legend">
-								i/c/a = units | S=stronghold G=gold L=lumber C=crown
-								H=high_ground F=forest h=hills D=deploy .=plains | A/B/. =
-								control
-							</div>
 						</div>
 					</div>
 
@@ -713,51 +639,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function strongholdForSide(side: "A" | "B"): string {
-	return side === "A" ? "B2" : "B20";
-}
-
 function buildStateLogLine(state: MatchState) {
 	const a = state.players.A;
 	const b = state.players.B;
 	return `T${state.turn} ${state.activePlayer} AP ${state.actionsRemaining} | Gold A/B ${a.gold}/${b.gold} | Wood A/B ${a.wood}/${b.wood} | VP A/B ${a.vp}/${b.vp}`;
 }
 
-function parseStateEnvelope(input: unknown): {
-	state: MatchState | null;
-	ascii: string | null;
-} {
+function parseStateFromEnvelope(input: unknown): MatchState | null {
 	if (!input || typeof input !== "object") {
-		return { state: null, ascii: null };
+		return null;
 	}
 
 	const container =
 		"state" in input ? ((input as { state?: unknown }).state ?? null) : input;
 	if (!container || typeof container !== "object") {
-		return { state: null, ascii: null };
+		return null;
 	}
-
-	const ascii =
-		pickAscii(container) ??
-		pickAscii((container as { game?: unknown }).game ?? null) ??
-		pickAscii(input);
 
 	const candidate =
 		(container as { game?: unknown }).game ??
 		(container as { state?: unknown }).state ??
 		container;
 	if (candidate && typeof candidate === "object" && "players" in candidate) {
-		return { state: candidate as MatchState, ascii: ascii ?? null };
+		return candidate as MatchState;
 	}
 
-	return { state: null, ascii: ascii ?? null };
-}
-
-function pickAscii(target: unknown): string | null {
-	if (!target || typeof target !== "object") return null;
-	const record = target as Record<string, unknown>;
-	if (typeof record.ascii === "string") return record.ascii;
-	if (typeof record.asciiBoard === "string") return record.asciiBoard;
-	if (typeof record.boardAscii === "string") return record.boardAscii;
 	return null;
 }

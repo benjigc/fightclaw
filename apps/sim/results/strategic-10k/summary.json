@@ -1,0 +1,59 @@
+{
+	"totalGames": 900,
+	"completedGames": 900,
+	"draws": 0,
+	"totalIllegalMoves": 0,
+	"wins": {
+		"P1": 607,
+		"P2": 293
+	},
+	"winRates": {
+		"P1": {
+			"wins": 607,
+			"losses": 293,
+			"total": 900,
+			"rate": 0.6744444444444444,
+			"ci95Lower": 0.64314510808649,
+			"ci95Upper": 0.704260897567598
+		},
+		"P2": {
+			"wins": 293,
+			"losses": 607,
+			"total": 900,
+			"rate": 0.32555555555555554,
+			"ci95Lower": 0.29573910243240187,
+			"ci95Upper": 0.35685489191350994
+		}
+	},
+	"matchLengths": {
+		"min": 180,
+		"max": 180,
+		"mean": 180,
+		"median": 180,
+		"stdDev": 0,
+		"p25": 180,
+		"p75": 180,
+		"p95": 180,
+		"outliers": []
+	},
+	"moveCounts": {},
+	"totalAnomalies": 0,
+	"anomaliesByType": {
+		"instant_surrender": 0,
+		"illegal_move_spree": 0,
+		"same_move_repetition": 0,
+		"timeout_pattern": 0,
+		"deterministic_loop": 0,
+		"extreme_win_rate": 0,
+		"draw_pattern": 0,
+		"statistical_outlier": 0
+	},
+	"anomaliesBySeverity": {
+		"info": 0,
+		"warn": 0,
+		"critical": 0
+	},
+	"strategyDistribution": {
+		"strategic": 2
+	}
+}
