@@ -2,7 +2,7 @@
 
 This file is the single source of truth for public wire contracts. Any change to request/response shapes or event payloads must update this file.
 
-This repo currently implements the older v1 (7x7 `{ q, r }`) ruleset in code. This document defines the **breaking** v2 wire contract for the War of Attrition ruleset (Arena 21x9) and preserves the v1 contract below for reference during migration.
+This document defines the v2 wire contract for the War of Attrition ruleset (Arena 21x9) and preserves the v1 contract below for reference.
 
 Canonical rules spec for v2:
 - `project docs/war-of-attrition-rules.md`
@@ -242,6 +242,8 @@ type Unit = {
 	type: UnitType;
 	owner: PlayerSide;
 	position: HexId;
+	hp: number;
+	maxHp: number; // infantry 3, cavalry 2, archer 2
 	isFortified: boolean;
 	// Per-player-turn bookkeeping for deterministic validation.
 	movedThisTurn: boolean;
@@ -262,7 +264,7 @@ type HexState = {
 	id: HexId;
 	type: HexType;
 	controlledBy: PlayerSide | null;
-	unitId: string | null;
+	unitIds: string[]; // unit IDs occupying this hex (stacked same-type units)
 	// Only present for gold_mine and lumber_camp.
 	reserve?: number;
 };
@@ -279,6 +281,65 @@ type GameState = {
 	status: "active" | "ended";
 };
 ```
+
+## Engine Events (v2)
+
+Engine events are emitted in the `engineEvents` array of an `engine_events` SSE envelope. Each event has a `type` discriminator:
+
+```ts
+type EngineEvent =
+	| { type: "turn_start"; turn: number; player: PlayerSide }
+	| { type: "turn_end"; turn: number; player: PlayerSide }
+	| { type: "move_unit"; turn: number; player: PlayerSide; unitId: string; from: HexId; to: HexId }
+	| {
+		type: "attack";
+		turn: number;
+		player: PlayerSide;
+		attackerId: string;
+		attackerFrom: HexId;
+		defenderIds: string[];
+		targetHex: HexId;
+		distance: number;
+		ranged: boolean;
+		attackPower: number;
+		defensePower: number;
+		abilities: string[];
+		outcome: {
+			attackerSurvivors: string[];
+			attackerCasualties: string[];
+			defenderSurvivors: string[];
+			defenderCasualties: string[];
+			damageDealt: number;
+			damageTaken: number;
+			captured: boolean;
+		};
+	  }
+	| { type: "recruit"; turn: number; player: PlayerSide; unitId: string; unitType: UnitType; at: HexId }
+	| { type: "fortify"; turn: number; player: PlayerSide; unitId: string; at: HexId }
+	| { type: "reject"; turn: number; player: PlayerSide; reason: string }
+	| { type: "control_update"; turn: number; changes: { hexId: HexId; from: PlayerSide | null; to: PlayerSide | null }[] }
+	| { type: "game_end"; turn: number; reason: string; winner: PlayerSide | null; vpA: number; vpB: number };
+```
+
+### Combat system (v2)
+
+- HP-based damage: units have `hp`/`maxHp`. Damage is applied front-to-back through a stack with overflow.
+- Attacker bonus: +1 ATK on every attack.
+- Stack bonuses: +1 ATK and +1 DEF per additional unit in a stack.
+- Formula: `ATK > DEF` → damage = ATK - DEF; `ATK == DEF` → damage = 1; `ATK < DEF` → damage = 1 (min), counterattack = 1 for melee (0 for ranged).
+- Melee capture: attacker moves to target hex only if ALL defenders die.
+- VP for kills: +1 VP per enemy unit killed.
+
+### Unit stacking (v2)
+
+- Same-type, same-owner units can share a hex (max 5 per stack).
+- Moving a stacked unit moves the entire stack.
+- Recruiting requires an empty hex (cannot recruit into a stack).
+
+### Victory conditions (v2)
+
+- Capturing ANY one enemy stronghold ends the game (`stronghold_capture`).
+- Turn limit: 20 turns. At limit, VP tiebreaker → unit value → hex count → draw.
 
 ## Event Schema (SSE, eventVersion=1)
 

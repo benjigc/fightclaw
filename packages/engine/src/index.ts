@@ -37,6 +37,8 @@ export type Unit = {
 	type: UnitType;
 	owner: PlayerSide;
 	position: HexId;
+	hp: number;
+	maxHp: number;
 	isFortified: boolean;
 	movedThisTurn: boolean;
 	movedDistance: number;
@@ -57,7 +59,7 @@ export type HexState = {
 	id: HexId;
 	type: HexType;
 	controlledBy: PlayerSide | null;
-	unitId: string | null;
+	unitIds: string[];
 	reserve?: number;
 };
 
@@ -134,7 +136,7 @@ export type EngineEvent =
 			player: PlayerSide;
 			attackerId: string;
 			attackerFrom: HexId;
-			defenderId: string;
+			defenderIds: string[];
 			targetHex: HexId;
 			distance: number;
 			ranged: boolean;
@@ -142,8 +144,12 @@ export type EngineEvent =
 			defensePower: number;
 			abilities: string[];
 			outcome: {
-				attacker: "survives" | "dies";
-				defender: "survives" | "dies";
+				attackerSurvivors: string[];
+				attackerCasualties: string[];
+				defenderSurvivors: string[];
+				defenderCasualties: string[];
+				damageDealt: number;
+				damageTaken: number;
 				captured: boolean;
 			};
 	  }
@@ -189,8 +195,8 @@ export type ApplyMoveResult =
 
 const ROWS = 9;
 const COLS = 21;
-const ACTIONS_PER_TURN = 3;
-const TURN_LIMIT = 30;
+const ACTIONS_PER_TURN = 5;
+const TURN_LIMIT = 20;
 const PLAYER_SIDES: PlayerSide[] = ["A", "B"];
 
 const ROW_LETTERS = "ABCDEFGHI";
@@ -435,6 +441,20 @@ export const MoveSchema = z.discriminatedUnion("action", [
 		.strict(),
 ]);
 
+const UnitSchema = z.object({
+	id: z.string(),
+	type: UnitTypeSchema,
+	owner: z.enum(["A", "B"]),
+	position: HexIdSchema,
+	hp: z.number().int(),
+	maxHp: z.number().int(),
+	isFortified: z.boolean(),
+	movedThisTurn: z.boolean(),
+	movedDistance: z.number(),
+	attackedThisTurn: z.boolean(),
+	canActThisTurn: z.boolean(),
+});
+
 export const MatchStateSchema = z.object({
 	seed: z.number().int(),
 	turn: z.number().int(),
@@ -446,38 +466,14 @@ export const MatchStateSchema = z.object({
 			gold: z.number(),
 			wood: z.number(),
 			vp: z.number(),
-			units: z.array(
-				z.object({
-					id: z.string(),
-					type: UnitTypeSchema,
-					owner: z.enum(["A", "B"]),
-					position: HexIdSchema,
-					isFortified: z.boolean(),
-					movedThisTurn: z.boolean(),
-					movedDistance: z.number(),
-					attackedThisTurn: z.boolean(),
-					canActThisTurn: z.boolean(),
-				}),
-			),
+			units: z.array(UnitSchema),
 		}),
 		B: z.object({
 			id: z.string(),
 			gold: z.number(),
 			wood: z.number(),
 			vp: z.number(),
-			units: z.array(
-				z.object({
-					id: z.string(),
-					type: UnitTypeSchema,
-					owner: z.enum(["A", "B"]),
-					position: HexIdSchema,
-					isFortified: z.boolean(),
-					movedThisTurn: z.boolean(),
-					movedDistance: z.number(),
-					attackedThisTurn: z.boolean(),
-					canActThisTurn: z.boolean(),
-				}),
-			),
+			units: z.array(UnitSchema),
 		}),
 	}),
 	board: z.array(
@@ -497,7 +493,7 @@ export const MatchStateSchema = z.object({
 				"deploy_b",
 			]),
 			controlledBy: z.enum(["A", "B"]).nullable(),
-			unitId: z.string().nullable(),
+			unitIds: z.array(z.string()),
 			reserve: z.number().optional(),
 		}),
 	),
@@ -513,6 +509,8 @@ export const GameStateSchema = MatchStateSchema;
 export type EngineConfig = {
 	actionsPerTurn: number;
 	turnLimit: number;
+	startingGold: number;
+	startingWood: number;
 	unitStats: {
 		infantry: {
 			cost: number;
@@ -520,6 +518,7 @@ export type EngineConfig = {
 			defense: number;
 			movement: number;
 			range: number;
+			hp: number;
 		};
 		cavalry: {
 			cost: number;
@@ -527,6 +526,7 @@ export type EngineConfig = {
 			defense: number;
 			movement: number;
 			range: number;
+			hp: number;
 		};
 		archer: {
 			cost: number;
@@ -534,6 +534,7 @@ export type EngineConfig = {
 			defense: number;
 			movement: number;
 			range: number;
+			hp: number;
 		};
 	};
 	terrainDefenseBonus: Record<HexType, number>;
@@ -542,6 +543,10 @@ export type EngineConfig = {
 		infantryAdjacencyBonusCap: number;
 		archerMeleeVulnerability: number;
 		fortifyBonus: number;
+		attackerBonus: number;
+		stackAttackBonus: number;
+		maxStackSize: number;
+		vpPerKill: number;
 	};
 	resourceNodes: {
 		goldMineReserve: number;
@@ -558,10 +563,33 @@ export type EngineConfigInput = Partial<EngineConfig>;
 export const DEFAULT_CONFIG: EngineConfig = {
 	actionsPerTurn: ACTIONS_PER_TURN,
 	turnLimit: TURN_LIMIT,
+	startingGold: 15,
+	startingWood: 5,
 	unitStats: {
-		infantry: { cost: 10, attack: 2, defense: 4, movement: 1, range: 1 },
-		cavalry: { cost: 18, attack: 4, defense: 2, movement: 3, range: 1 },
-		archer: { cost: 14, attack: 3, defense: 1, movement: 2, range: 2 },
+		infantry: {
+			cost: 10,
+			attack: 2,
+			defense: 4,
+			movement: 2,
+			range: 1,
+			hp: 3,
+		},
+		cavalry: {
+			cost: 18,
+			attack: 4,
+			defense: 2,
+			movement: 4,
+			range: 1,
+			hp: 2,
+		},
+		archer: {
+			cost: 14,
+			attack: 3,
+			defense: 1,
+			movement: 3,
+			range: 2,
+			hp: 2,
+		},
 	},
 	terrainDefenseBonus: {
 		plains: 0,
@@ -573,14 +601,18 @@ export const DEFAULT_CONFIG: EngineConfig = {
 		forest: 1,
 		crown: 1,
 		high_ground: 2,
-		stronghold_a: 3,
-		stronghold_b: 3,
+		stronghold_a: 1,
+		stronghold_b: 1,
 	},
 	abilities: {
 		cavalryChargeBonus: 2,
 		infantryAdjacencyBonusCap: 2,
 		archerMeleeVulnerability: 1,
-		fortifyBonus: 2,
+		fortifyBonus: 1,
+		attackerBonus: 1,
+		stackAttackBonus: 1,
+		maxStackSize: 5,
+		vpPerKill: 1,
 	},
 	resourceNodes: {
 		goldMineReserve: 20,
@@ -597,7 +629,20 @@ function mergeConfig(input?: EngineConfigInput): EngineConfig {
 	return {
 		...DEFAULT_CONFIG,
 		...input,
-		unitStats: { ...DEFAULT_CONFIG.unitStats, ...input.unitStats },
+		unitStats: {
+			infantry: {
+				...DEFAULT_CONFIG.unitStats.infantry,
+				...input.unitStats?.infantry,
+			},
+			cavalry: {
+				...DEFAULT_CONFIG.unitStats.cavalry,
+				...input.unitStats?.cavalry,
+			},
+			archer: {
+				...DEFAULT_CONFIG.unitStats.archer,
+				...input.unitStats?.archer,
+			},
+		},
 		terrainDefenseBonus: {
 			...DEFAULT_CONFIG.terrainDefenseBonus,
 			...input.terrainDefenseBonus,
@@ -896,7 +941,7 @@ function buildCanonicalBoard(config: EngineConfig): HexState[] {
 				id,
 				type: hexType,
 				controlledBy,
-				unitId: null,
+				unitIds: [],
 			};
 			if (reserve !== undefined) {
 				hex.reserve = reserve;
@@ -916,18 +961,28 @@ function getHex(state: MatchState, id: HexId): HexState | null {
 	return state.board[hexIdIndex(id)] ?? null;
 }
 
-function setHexUnit(state: MatchState, id: HexId, unitId: string | null) {
-	const idx = hexIdIndex(id);
+function addUnitToHex(state: MatchState, hexId: HexId, unitId: string) {
+	const idx = hexIdIndex(hexId);
 	const existing = state.board[idx];
 	if (!existing) return;
-	state.board[idx] = { ...existing, unitId };
+	state.board[idx] = { ...existing, unitIds: [...existing.unitIds, unitId] };
 }
 
-function setHexControl(state: MatchState, id: HexId, owner: PlayerSide | null) {
-	const idx = hexIdIndex(id);
+function removeUnitFromHex(state: MatchState, hexId: HexId, unitId: string) {
+	const idx = hexIdIndex(hexId);
 	const existing = state.board[idx];
 	if (!existing) return;
-	state.board[idx] = { ...existing, controlledBy: owner };
+	state.board[idx] = {
+		...existing,
+		unitIds: existing.unitIds.filter((id) => id !== unitId),
+	};
+}
+
+function clearHexUnits(state: MatchState, hexId: HexId) {
+	const idx = hexIdIndex(hexId);
+	const existing = state.board[idx];
+	if (!existing) return;
+	state.board[idx] = { ...existing, unitIds: [] };
 }
 
 function getUnit(state: MatchState, unitId: string): Unit | null {
@@ -938,9 +993,20 @@ function getUnit(state: MatchState, unitId: string): Unit | null {
 	return null;
 }
 
+function getUnitsOnHex(state: MatchState, hexId: HexId): Unit[] {
+	const hex = getHex(state, hexId);
+	if (!hex) return [];
+	const units: Unit[] = [];
+	for (const id of hex.unitIds) {
+		const u = getUnit(state, id);
+		if (u) units.push(u);
+	}
+	return units;
+}
+
 function addUnit(state: MatchState, unit: Unit) {
 	state.players[unit.owner].units.push(unit);
-	setHexUnit(state, unit.position, unit.id);
+	addUnitToHex(state, unit.position, unit.id);
 }
 
 function removeUnit(state: MatchState, unitId: string): Unit | null {
@@ -949,7 +1015,7 @@ function removeUnit(state: MatchState, unitId: string): Unit | null {
 		if (idx >= 0) {
 			const [unit] = state.players[side].units.splice(idx, 1);
 			if (!unit) return null;
-			setHexUnit(state, unit.position, null);
+			removeUnitFromHex(state, unit.position, unit.id);
 			return unit;
 		}
 	}
@@ -957,21 +1023,30 @@ function removeUnit(state: MatchState, unitId: string): Unit | null {
 }
 
 function moveUnitTo(state: MatchState, unit: Unit, to: HexId, dist: number) {
-	setHexUnit(state, unit.position, null);
+	removeUnitFromHex(state, unit.position, unit.id);
 	unit.position = to;
 	unit.movedThisTurn = true;
 	unit.movedDistance = dist;
-	setHexUnit(state, to, unit.id);
+	addUnitToHex(state, to, unit.id);
 }
 
-function buildOccupiedSet(state: MatchState): Set<HexId> {
-	const occupied = new Set<HexId>();
-	for (const side of PLAYER_SIDES) {
-		for (const unit of state.players[side].units) {
-			occupied.add(unit.position);
+/** Move an entire stack (all units on the same hex as unit) together */
+function moveStackTo(state: MatchState, unit: Unit, to: HexId, dist: number) {
+	const hex = getHex(state, unit.position);
+	if (!hex) return;
+	const stackUnitIds = [...hex.unitIds];
+	// Remove all from source hex
+	clearHexUnits(state, unit.position);
+	// Update each unit's position
+	for (const uid of stackUnitIds) {
+		const u = getUnit(state, uid);
+		if (u) {
+			u.position = to;
+			u.movedThisTurn = true;
+			u.movedDistance = dist;
+			addUnitToHex(state, to, u.id);
 		}
 	}
-	return occupied;
 }
 
 function otherSide(side: PlayerSide): PlayerSide {
@@ -1003,7 +1078,7 @@ function cloneState(state: MatchState): MatchState {
 				units: state.players.B.units.map((u) => ({ ...u })),
 			},
 		},
-		board: state.board.map((h) => ({ ...h })),
+		board: state.board.map((h) => ({ ...h, unitIds: [...h.unitIds] })),
 	};
 }
 
@@ -1114,7 +1189,7 @@ function computeLoS(
 	}
 
 	// Check if mid hex has a unit blocking LoS
-	if (midHexState?.unitId) {
+	if (midHexState && midHexState.unitIds.length > 0) {
 		const attackerHex = getHex(state, attackerPos);
 		if (attackerHex?.type !== "high_ground") {
 			return { clear: false, reason: "Unit blocking LoS on mid hex" };
@@ -1131,62 +1206,95 @@ function computeLoS(
 type CombatResult = {
 	attackPower: number;
 	defensePower: number;
-	attackerSurvives: boolean;
-	defenderSurvives: boolean;
-	captured: boolean;
+	damageToDefenders: number;
+	damageToAttackers: number;
 	abilities: string[];
 };
 
+function applyDamageToStack(
+	units: Unit[],
+	damage: number,
+): { survivors: Unit[]; casualties: Unit[] } {
+	const survivors: Unit[] = [];
+	const casualties: Unit[] = [];
+	let remaining = damage;
+	for (const u of units) {
+		if (remaining <= 0) {
+			survivors.push(u);
+			continue;
+		}
+		if (u.hp > remaining) {
+			u.hp -= remaining;
+			remaining = 0;
+			survivors.push(u);
+		} else {
+			remaining -= u.hp;
+			u.hp = 0;
+			casualties.push(u);
+		}
+	}
+	return { survivors, casualties };
+}
+
 function computeCombat(
-	attacker: Unit,
-	defender: Unit,
+	attackers: Unit[],
+	defenders: Unit[],
 	state: MatchState,
 	dist: number,
 ): CombatResult {
 	const config = resolveConfig();
 	const abilities: string[] = [];
 
-	// Attack power
-	let attackPower = config.unitStats[attacker.type].attack;
+	const leadAttacker = attackers[0]!;
+	const leadDefender = defenders[0]!;
+
+	// Attack power: base ATK + attacker bonus + stack bonus + cavalry charge
+	let attackPower = config.unitStats[leadAttacker.type].attack;
+	attackPower += config.abilities.attackerBonus;
+	abilities.push("attacker_bonus");
+
+	// Stack bonus: +1 per extra attacker
+	const attackStackExtra = attackers.length - 1;
+	if (attackStackExtra > 0) {
+		attackPower += attackStackExtra * config.abilities.stackAttackBonus;
+		abilities.push(`stack_atk_+${attackStackExtra}`);
+	}
 
 	// Cavalry charge: +2 if cavalry, moved this turn with distance >= 2,
 	// and there was a forest-free shortest path
-	if (attacker.type === "cavalry" && attacker.chargeEligible) {
+	if (leadAttacker.type === "cavalry" && leadAttacker.chargeEligible) {
 		attackPower += config.abilities.cavalryChargeBonus;
 		abilities.push("cavalry_charge");
 	}
 
-	// Defense power
-	const defenderHex = getHex(state, defender.position);
-	let defensePower = config.unitStats[defender.type].defense;
+	// Defense power: base DEF + terrain + fortify + shield wall + stack bonus
+	const defenderHex = getHex(state, leadDefender.position);
+	let defensePower = config.unitStats[leadDefender.type].defense;
 
 	// Terrain bonus
 	if (defenderHex) {
 		defensePower += config.terrainDefenseBonus[defenderHex.type];
 	}
 
-	// Fortify bonus
-	if (defender.isFortified) {
+	// Fortify bonus (any unit in stack fortified applies)
+	if (defenders.some((d) => d.isFortified)) {
 		defensePower += config.abilities.fortifyBonus;
 		abilities.push("fortify");
 	}
 
-	// Shield Wall: infantry +1 per adjacent friendly infantry, max +2
-	if (defender.type === "infantry") {
-		const adjacentIds = neighborsOf(defender.position);
+	// Shield Wall: +1 per adjacent hex with friendly infantry, max +2
+	if (leadDefender.type === "infantry") {
+		const adjacentIds = neighborsOf(leadDefender.position);
 		let shieldWallBonus = 0;
 		for (const adjId of adjacentIds) {
 			const adjHex = getHex(state, adjId);
-			if (adjHex?.unitId) {
-				const adjUnit = getUnit(state, adjHex.unitId);
-				if (
-					adjUnit &&
-					adjUnit.owner === defender.owner &&
-					adjUnit.type === "infantry" &&
-					adjUnit.id !== defender.id
-				) {
-					shieldWallBonus++;
-				}
+			if (adjHex && adjHex.unitIds.length > 0) {
+				// Count this hex if it has any friendly infantry
+				const hasInfantry = adjHex.unitIds.some((uid) => {
+					const u = getUnit(state, uid);
+					return u && u.owner === leadDefender.owner && u.type === "infantry";
+				});
+				if (hasInfantry) shieldWallBonus++;
 			}
 		}
 		shieldWallBonus = Math.min(
@@ -1199,8 +1307,15 @@ function computeCombat(
 		}
 	}
 
+	// Defender stack bonus: +1 per extra defender
+	const defStackExtra = defenders.length - 1;
+	if (defStackExtra > 0) {
+		defensePower += defStackExtra * config.abilities.stackAttackBonus;
+		abilities.push(`stack_def_+${defStackExtra}`);
+	}
+
 	// Archer melee vulnerability: -1 DEF at distance 1 (floor 0)
-	if (defender.type === "archer" && dist === 1) {
+	if (leadDefender.type === "archer" && dist === 1) {
 		defensePower = Math.max(
 			0,
 			defensePower - config.abilities.archerMeleeVulnerability,
@@ -1208,28 +1323,28 @@ function computeCombat(
 		abilities.push("archer_melee_vulnerability");
 	}
 
-	// Resolve
+	// Resolve damage
 	const ranged = dist > 1;
-	let attackerSurvives = true;
-	let defenderSurvives = true;
-	let captured = false;
+	let damageToDefenders: number;
+	let damageToAttackers: number;
 
 	if (attackPower > defensePower) {
-		defenderSurvives = false;
-		if (!ranged) captured = true;
+		damageToDefenders = attackPower - defensePower;
+		damageToAttackers = 0;
 	} else if (attackPower === defensePower) {
-		attackerSurvives = false;
-		defenderSurvives = false;
+		damageToDefenders = 1;
+		damageToAttackers = 0;
 	} else {
-		attackerSurvives = false;
+		// ATK < DEF
+		damageToDefenders = 1; // minimum damage
+		damageToAttackers = ranged ? 0 : 1; // counterattack only in melee
 	}
 
 	return {
 		attackPower,
 		defensePower,
-		attackerSurvives,
-		defenderSurvives,
-		captured,
+		damageToDefenders,
+		damageToAttackers,
 		abilities,
 	};
 }
@@ -1239,12 +1354,11 @@ function computeCombat(
 // ---------------------------------------------------------------------------
 
 function computeImmediateTerminal(state: MatchState): TerminalState {
-	// Stronghold capture: check after control update
-	// A wins if both B20 and H20 are controlled by A
+	// Stronghold capture: ONE stronghold is enough to win
 	const [bStronghold1, bStronghold2] = STRONGHOLD_HEXES.B;
 	const bS1 = getHex(state, bStronghold1);
 	const bS2 = getHex(state, bStronghold2);
-	if (bS1?.controlledBy === "A" && bS2?.controlledBy === "A") {
+	if (bS1?.controlledBy === "A" || bS2?.controlledBy === "A") {
 		return {
 			ended: true,
 			winner: state.players.A.id,
@@ -1252,11 +1366,10 @@ function computeImmediateTerminal(state: MatchState): TerminalState {
 		};
 	}
 
-	// B wins if both B2 and H2 are controlled by B
 	const [aStronghold1, aStronghold2] = STRONGHOLD_HEXES.A;
 	const aS1 = getHex(state, aStronghold1);
 	const aS2 = getHex(state, aStronghold2);
-	if (aS1?.controlledBy === "B" && aS2?.controlledBy === "B") {
+	if (aS1?.controlledBy === "B" || aS2?.controlledBy === "B") {
 		return {
 			ended: true,
 			winner: state.players.B.id,
@@ -1354,9 +1467,9 @@ function applyControlUpdate(
 		to: PlayerSide | null;
 	}[] = [];
 	for (const hex of state.board) {
-		if (hex.unitId) {
-			const unit = getUnit(state, hex.unitId);
-			const nextOwner = unit ? unit.owner : hex.controlledBy;
+		if (hex.unitIds.length > 0) {
+			const firstUnit = getUnit(state, hex.unitIds[0]!);
+			const nextOwner = firstUnit ? firstUnit.owner : hex.controlledBy;
 			if (nextOwner !== hex.controlledBy) {
 				changes.push({
 					hex: hex.id,
@@ -1397,15 +1510,15 @@ export function createInitialState(
 		players: {
 			A: {
 				id: playerA,
-				gold: 0,
-				wood: 0,
+				gold: config.startingGold,
+				wood: config.startingWood,
 				vp: 0,
 				units: [],
 			},
 			B: {
 				id: playerB,
-				gold: 0,
-				wood: 0,
+				gold: config.startingGold,
+				wood: config.startingWood,
 				vp: 0,
 				units: [],
 			},
@@ -1436,11 +1549,14 @@ export function createInitialState(
 	];
 
 	for (const def of startingUnits) {
+		const hp = config.unitStats[def.type].hp;
 		const unit: Unit = {
 			id: def.id,
 			type: def.type,
 			owner: def.owner,
 			position: def.position,
+			hp,
+			maxHp: hp,
 			isFortified: false,
 			movedThisTurn: false,
 			movedDistance: 0,
@@ -1487,11 +1603,11 @@ export function listLegalMoves(state: MatchState): Move[] {
 	const canAct = state.actionsRemaining > 0;
 
 	if (canAct) {
-		// Recruit at own strongholds
+		// Recruit at own strongholds (must be empty)
 		const strongholds = STRONGHOLD_HEXES[side];
 		for (const shId of strongholds) {
 			const hex = getHex(state, shId);
-			if (hex && hex.controlledBy === side && hex.unitId == null) {
+			if (hex && hex.controlledBy === side && hex.unitIds.length === 0) {
 				for (const unitType of [
 					"infantry",
 					"cavalry",
@@ -1505,40 +1621,72 @@ export function listLegalMoves(state: MatchState): Move[] {
 			}
 		}
 
-		const occupied = buildOccupiedSet(state);
+		// Build blocked set for movement: enemy hexes and friendly different-type hexes are blocked
+		// Friendly same-type hexes (below maxStackSize) are passable destinations
+		const seenMoveUnits = new Set<HexId>(); // track stacks already generating moves
 
 		// Move
 		for (const unit of sortUnits(player.units)) {
 			if (!unit.canActThisTurn) continue;
 			if (unit.movedThisTurn) continue;
+			// Only generate one move per stack position
+			if (seenMoveUnits.has(unit.position)) continue;
+			seenMoveUnits.add(unit.position);
+
 			const movementRange = config.unitStats[unit.type].movement;
-			const blocked = new Set(occupied);
-			blocked.delete(unit.position);
+			// Build blocked: hexes that this unit/stack can't pass through or land on
+			const blocked = new Set<HexId>();
+			for (const s of PLAYER_SIDES) {
+				for (const u of state.players[s].units) {
+					if (u.position === unit.position) continue; // self/stack
+					if (s !== side) {
+						blocked.add(u.position); // enemy hexes
+					} else if (u.type !== unit.type) {
+						blocked.add(u.position); // friendly different type
+					}
+					// friendly same type: check stack size
+				}
+			}
+			// Also block friendly same-type that are at maxStackSize
+			for (const hex of state.board) {
+				if (hex.unitIds.length >= config.abilities.maxStackSize) {
+					if (hex.id !== unit.position) blocked.add(hex.id);
+				}
+			}
+
 			const reachable = reachableHexes(unit.position, movementRange, blocked);
 			for (const hexId of sortHexIds(reachable)) {
 				moves.push({ action: "move", unitId: unit.id, to: hexId });
 			}
 		}
 
-		// Attack
-		const enemyUnits = state.players[otherSide(side)].units;
+		// Attack — deduplicate target hexes per unit
+		const enemyPositions = new Set<HexId>();
+		for (const eu of state.players[otherSide(side)].units) {
+			enemyPositions.add(eu.position);
+		}
+		const seenAttackUnits = new Set<HexId>();
+
 		for (const unit of sortUnits(player.units)) {
 			if (!unit.canActThisTurn) continue;
 			if (unit.attackedThisTurn) continue;
+			// One attack action per stack
+			if (seenAttackUnits.has(unit.position)) continue;
+			seenAttackUnits.add(unit.position);
+
 			const range = config.unitStats[unit.type].range;
-			const targets: HexId[] = [];
-			for (const enemy of enemyUnits) {
-				const dist = hexDistance(unit.position, enemy.position);
+			const targets = new Set<HexId>();
+			for (const enemyPos of enemyPositions) {
+				const dist = hexDistance(unit.position, enemyPos);
 				if (dist !== null && dist >= 1 && dist <= range) {
-					// Check LoS for range-2 attacks
 					if (dist === 2) {
-						const los = computeLoS(unit.position, enemy.position, state);
+						const los = computeLoS(unit.position, enemyPos, state);
 						if (!los.clear) continue;
 					}
-					targets.push(enemy.position);
+					targets.add(enemyPos);
 				}
 			}
-			for (const hexId of sortHexIds(targets)) {
+			for (const hexId of sortHexIds([...targets])) {
 				moves.push({ action: "attack", unitId: unit.id, target: hexId });
 			}
 		}
@@ -1624,7 +1772,7 @@ export function validateMove(
 					error: "Stronghold not controlled by player.",
 				};
 			}
-			if (hex.unitId != null) {
+			if (hex.unitIds.length > 0) {
 				return {
 					ok: false,
 					reason: "illegal_move",
@@ -1672,16 +1820,54 @@ export function validateMove(
 				};
 			}
 			const targetHex = getHex(state, m.to);
-			if (!targetHex || targetHex.unitId != null) {
+			if (!targetHex) {
 				return {
 					ok: false,
 					reason: "illegal_move",
 					error: "Target occupied.",
 				};
 			}
-			const occupied = buildOccupiedSet(state);
-			occupied.delete(unit.position);
-			const dist = pathDistance(unit.position, m.to, occupied);
+			// Allow stacking with friendly same-type, but not enemy or different type
+			if (targetHex.unitIds.length > 0) {
+				const targetUnits = getUnitsOnHex(state, m.to);
+				const hasEnemy = targetUnits.some((u) => u.owner !== side);
+				const hasDiffType = targetUnits.some((u) => u.type !== unit.type);
+				if (hasEnemy || hasDiffType) {
+					return {
+						ok: false,
+						reason: "illegal_move",
+						error: "Target occupied.",
+					};
+				}
+				if (targetHex.unitIds.length >= config.abilities.maxStackSize) {
+					return {
+						ok: false,
+						reason: "illegal_move",
+						error: "Stack is full.",
+					};
+				}
+			}
+			// Build blocked set for pathfinding
+			const blocked = new Set<HexId>();
+			for (const s of PLAYER_SIDES) {
+				for (const u of state.players[s].units) {
+					if (u.position === unit.position) continue;
+					if (u.position === m.to) continue; // allow destination
+					if (s !== side) {
+						blocked.add(u.position);
+					} else if (u.type !== unit.type) {
+						blocked.add(u.position);
+					}
+				}
+			}
+			// Block friendly same-type at maxStackSize (except destination, handled above)
+			for (const hex of state.board) {
+				if (hex.id === unit.position || hex.id === m.to) continue;
+				if (hex.unitIds.length >= config.abilities.maxStackSize) {
+					blocked.add(hex.id);
+				}
+			}
+			const dist = pathDistance(unit.position, m.to, blocked);
 			if (dist == null || dist > config.unitStats[unit.type].movement) {
 				return {
 					ok: false,
@@ -1722,15 +1908,15 @@ export function validateMove(
 				};
 			}
 			const targetHex = getHex(state, m.target);
-			if (!targetHex || !targetHex.unitId) {
+			if (!targetHex || targetHex.unitIds.length === 0) {
 				return {
 					ok: false,
 					reason: "illegal_move",
 					error: "No target unit.",
 				};
 			}
-			const targetUnit = getUnit(state, targetHex.unitId);
-			if (!targetUnit || targetUnit.owner === side) {
+			const targetUnits = getUnitsOnHex(state, m.target);
+			if (targetUnits.length === 0 || targetUnits[0]!.owner === side) {
 				return {
 					ok: false,
 					reason: "illegal_move",
@@ -1842,11 +2028,14 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 		case "recruit": {
 			if (m.action !== "recruit") break; // narrowing
 			const unitId = nextUnitId(nextState, side);
+			const hp = config.unitStats[m.unitType].hp;
 			const unit: Unit = {
 				id: unitId,
 				type: m.unitType,
 				owner: side,
 				position: m.at,
+				hp,
+				maxHp: hp,
 				isFortified: false,
 				movedThisTurn: false,
 				movedDistance: 0,
@@ -1870,9 +2059,26 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 			if (!unit) {
 				return failMove(nextState, m, "invalid_move", "Unit not found.");
 			}
-			const occupied = buildOccupiedSet(nextState);
-			occupied.delete(unit.position);
-			const dist = pathDistance(unit.position, m.to, occupied);
+			// Build blocked set matching validateMove logic
+			const blocked = new Set<HexId>();
+			for (const s of PLAYER_SIDES) {
+				for (const u of nextState.players[s].units) {
+					if (u.position === unit.position) continue;
+					if (u.position === m.to) continue;
+					if (s !== side) {
+						blocked.add(u.position);
+					} else if (u.type !== unit.type) {
+						blocked.add(u.position);
+					}
+				}
+			}
+			for (const hex of nextState.board) {
+				if (hex.id === unit.position || hex.id === m.to) continue;
+				if (hex.unitIds.length >= config.abilities.maxStackSize) {
+					blocked.add(hex.id);
+				}
+			}
+			const dist = pathDistance(unit.position, m.to, blocked);
 			if (dist == null) {
 				return failMove(nextState, m, "invalid_move", "Move path not found.");
 			}
@@ -1885,12 +2091,13 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 					from,
 					m.to,
 					dist,
-					occupied,
+					blocked,
 					nextState.board,
 				);
 			}
 
-			moveUnitTo(nextState, unit, m.to, dist);
+			// Move entire stack together
+			moveStackTo(nextState, unit, m.to, dist);
 			unit.chargeEligible = chargeEligible || undefined;
 
 			engineEvents.push({
@@ -1904,64 +2111,81 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 			break;
 		}
 		case "attack": {
-			const attacker = getUnit(nextState, m.unitId);
-			if (!attacker) {
+			const leadAttacker = getUnit(nextState, m.unitId);
+			if (!leadAttacker) {
 				return failMove(nextState, m, "invalid_move", "Attacker not found.");
 			}
 			const targetHex = getHex(nextState, m.target);
-			if (!targetHex || !targetHex.unitId) {
+			if (!targetHex || targetHex.unitIds.length === 0) {
 				return failMove(nextState, m, "invalid_move", "Target missing.");
 			}
-			const defender = getUnit(nextState, targetHex.unitId);
-			if (!defender) {
+			const attackers = getUnitsOnHex(nextState, leadAttacker.position);
+			const defenders = getUnitsOnHex(nextState, m.target);
+			if (defenders.length === 0) {
 				return failMove(nextState, m, "invalid_move", "Defender missing.");
 			}
 
-			const attackerFrom = attacker.position;
-			const defenderId = defender.id;
-			const dist = hexDistance(attacker.position, defender.position) ?? 0;
+			const attackerFrom = leadAttacker.position;
+			const defenderIds = defenders.map((d) => d.id);
+			const dist =
+				hexDistance(leadAttacker.position, defenders[0]!.position) ?? 0;
+			const ranged = dist > 1;
 
-			const combat = computeCombat(attacker, defender, nextState, dist);
+			const combat = computeCombat(attackers, defenders, nextState, dist);
 
-			if (!combat.defenderSurvives) {
-				removeUnit(nextState, defender.id);
-			}
-			if (!combat.attackerSurvives) {
-				removeUnit(nextState, attacker.id);
-			}
-
-			// Tie: neutralize defender hex
-			if (!combat.attackerSurvives && !combat.defenderSurvives) {
-				setHexControl(nextState, defender.position, null);
+			// Apply damage to defenders
+			const defResult = applyDamageToStack(defenders, combat.damageToDefenders);
+			for (const dead of defResult.casualties) {
+				removeUnit(nextState, dead.id);
+				// VP for kill
+				player.vp += config.abilities.vpPerKill;
 			}
 
-			// Melee capture: attacker moves into defender hex
-			if (combat.attackerSurvives && combat.captured) {
-				moveUnitTo(nextState, attacker, defender.position, dist);
+			// Apply damage to attackers (counterattack)
+			const atkResult = applyDamageToStack(attackers, combat.damageToAttackers);
+			const enemySide = otherSide(side);
+			for (const dead of atkResult.casualties) {
+				removeUnit(nextState, dead.id);
+				nextState.players[enemySide].vp += config.abilities.vpPerKill;
 			}
 
-			// Mark attacker as having attacked
-			if (combat.attackerSurvives) {
-				attacker.attackedThisTurn = true;
+			// Melee capture: attackers move in if ALL defenders dead
+			const allDefendersDead = defResult.survivors.length === 0;
+			const captured =
+				!ranged && allDefendersDead && atkResult.survivors.length > 0;
+			if (captured) {
+				// Move surviving attackers into defender hex
+				for (const surv of atkResult.survivors) {
+					moveUnitTo(nextState, surv, m.target, dist);
+				}
+			}
+
+			// Mark surviving attackers as having attacked
+			for (const surv of atkResult.survivors) {
+				surv.attackedThisTurn = true;
 			}
 
 			engineEvents.push({
 				type: "attack",
 				turn: nextState.turn,
 				player: side,
-				attackerId: attacker.id,
+				attackerId: leadAttacker.id,
 				attackerFrom,
-				defenderId,
+				defenderIds,
 				targetHex: m.target,
 				distance: dist,
-				ranged: dist > 1,
+				ranged,
 				attackPower: combat.attackPower,
 				defensePower: combat.defensePower,
 				abilities: combat.abilities,
 				outcome: {
-					attacker: combat.attackerSurvives ? "survives" : "dies",
-					defender: combat.defenderSurvives ? "survives" : "dies",
-					captured: combat.captured,
+					attackerSurvivors: atkResult.survivors.map((u) => u.id),
+					attackerCasualties: atkResult.casualties.map((u) => u.id),
+					defenderSurvivors: defResult.survivors.map((u) => u.id),
+					defenderCasualties: defResult.casualties.map((u) => u.id),
+					damageDealt: combat.damageToDefenders,
+					damageTaken: combat.damageToAttackers,
+					captured,
 				},
 			});
 			break;
@@ -1972,8 +2196,12 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 				return failMove(nextState, m, "invalid_move", "Unit not found.");
 			}
 			player.wood -= 1;
-			unit.isFortified = true;
-			unit.canActThisTurn = false; // fortify consumes the unit's action budget
+			// Fortify all units on the hex
+			const stackUnits = getUnitsOnHex(nextState, unit.position);
+			for (const su of stackUnits) {
+				su.isFortified = true;
+				su.canActThisTurn = false;
+			}
 			engineEvents.push({
 				type: "fortify",
 				turn: nextState.turn,
@@ -2109,16 +2337,18 @@ export function renderAscii(state: MatchState): string {
 				cells.push(" ?? ");
 				continue;
 			}
-			const unit = hex.unitId ? getUnit(state, hex.unitId) : null;
+			const unit =
+				hex.unitIds.length > 0 ? getUnit(state, hex.unitIds[0]!) : null;
 			const owner = unit?.owner ?? hex.controlledBy ?? ".";
+			const stackCount = hex.unitIds.length;
 			const content = unit
-				? unit.type === "infantry"
-					? "i"
-					: unit.type === "cavalry"
-						? "c"
-						: "a"
+				? (unit.type === "infantry"
+						? "i"
+						: unit.type === "cavalry"
+							? "c"
+							: "a") + (stackCount > 1 ? String(stackCount) : "")
 				: terrainChar(hex.type);
-			cells.push(` ${owner}${content} `);
+			cells.push(` ${owner}${content.padEnd(2)} `.slice(0, 4));
 		}
 		lines.push(`${rowLabel}  ${cells.join("")}`);
 	}

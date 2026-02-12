@@ -91,7 +91,8 @@ export function renderBoardGridWithWarnings(
 			continue;
 		}
 
-		const unit = hex.unitId ? (unitByPos.get(hex.id) ?? null) : null;
+		const unit =
+			hex.unitIds?.length > 0 ? (unitByPos.get(hex.id) ?? null) : null;
 		const owner = unit?.owner ?? hex.controlledBy ?? ".";
 		const symbol = unit
 			? (UNIT_LETTERS[unit.type] ?? "?")

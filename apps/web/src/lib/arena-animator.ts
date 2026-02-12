@@ -141,12 +141,8 @@ export function useArenaAnimator(options?: {
 					| Extract<EngineEvent, { type: "attack" }>
 					| undefined;
 				if (ev) {
-					if (ev.outcome.defender === "dies") {
-						dyingIds.push(ev.defenderId);
-					}
-					if (ev.outcome.attacker === "dies") {
-						dyingIds.push(ev.attackerId);
-					}
+					dyingIds.push(...ev.outcome.defenderCasualties);
+					dyingIds.push(...ev.outcome.attackerCasualties);
 				}
 			}
 

@@ -61,6 +61,20 @@ export const HexBoard = memo(function HexBoard({
 		return result;
 	}, [livingUnits, livingMap, dyingUnitIds]);
 
+	// Group visible units by position to render stacks as a single token
+	const stacks = useMemo(() => {
+		const byPos = new Map<string, Unit[]>();
+		for (const u of visibleUnits) {
+			const existing = byPos.get(u.position);
+			if (existing) {
+				existing.push(u);
+			} else {
+				byPos.set(u.position, [u]);
+			}
+		}
+		return byPos;
+	}, [visibleUnits]);
+
 	// After computing visible units, update the prev ref
 	prevUnitsRef.current = livingMap;
 
@@ -93,19 +107,21 @@ export const HexBoard = memo(function HexBoard({
 				{/* Layer 2: Transient effects */}
 				<ArenaEffects effects={effects} hexRadius={R} />
 
-				{/* Layer 3: Units */}
+				{/* Layer 3: Units (grouped by position for stacks) */}
 				<AnimatePresence>
-					{visibleUnits.map((unit) => {
-						const pos = hexIdToPixel(unit.position, R);
-						const animState = unitAnimStates.get(unit.id) ?? "idle";
+					{[...stacks.entries()].map(([position, units]) => {
+						const lead = units[0]!;
+						const pos = hexIdToPixel(position, R);
+						const animState = unitAnimStates.get(lead.id) ?? "idle";
 						return (
 							<UnitToken
-								key={unit.id}
-								unit={unit}
+								key={lead.id}
+								unit={lead}
 								x={pos.x}
 								y={pos.y}
 								radius={R}
 								animState={animState}
+								stackCount={units.length}
 							/>
 						);
 					})}

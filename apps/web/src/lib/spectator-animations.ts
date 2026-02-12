@@ -299,10 +299,10 @@ export function useSpectatorAnimator(options?: {
 					if (runTokenRef.current !== token) return;
 
 					clearOverrideByKey(tgtKey);
-					if (ev.outcome.defender === "dies") {
+					if (ev.outcome.defenderCasualties.length > 0) {
 						setOverrideByKey(tgtKey, "xx");
 					}
-					if (ev.outcome.attacker === "dies") {
+					if (ev.outcome.attackerCasualties.length > 0) {
 						setOverrideByKey(atkKey, "xx");
 					}
 					if (ev.outcome.captured) {
