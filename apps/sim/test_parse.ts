@@ -1,0 +1,14 @@
+import { parseLlmJsonish } from "./src/bots/llmBot";
+
+const testCases = [
+	'{ "moveIndex": 12, "reasoning": "foo" }',
+	'```json\n{\n  "move": 0,\n  "position": {\n    "row": 0,\n    "col": 0\n  },\n  "player": "X"\n}\n```',
+	'{ "moveIndex": 3, "reasoning": "test" }',
+	"moveIndex=7\nreasoning: because",
+];
+
+for (const test of testCases) {
+	console.log("Input:", test.substring(0, 50) + "...");
+	console.log("Parsed:", parseLlmJsonish(test));
+	console.log("---");
+}
