@@ -142,45 +142,37 @@ function parseLines(text: string): ParsedCommand[] {
 		if (line === "" || line.startsWith("#")) continue;
 
 		const parts = line.split(/\s+/);
-		const action = parts[0]!.toLowerCase();
+		const action = (parts[0] ?? "").toLowerCase();
 
 		switch (action) {
 			case "move": {
-				if (parts.length >= 3) {
-					results.push({
-						action: "move",
-						unitId: parts[1]!,
-						target: parts[2]!,
-					});
+				const unitId = parts[1];
+				const target = parts[2];
+				if (unitId && target) {
+					results.push({ action: "move", unitId, target });
 				}
 				break;
 			}
 			case "attack": {
-				if (parts.length >= 3) {
-					results.push({
-						action: "attack",
-						unitId: parts[1]!,
-						target: parts[2]!,
-					});
+				const unitId = parts[1];
+				const target = parts[2];
+				if (unitId && target) {
+					results.push({ action: "attack", unitId, target });
 				}
 				break;
 			}
 			case "recruit": {
-				if (parts.length >= 3) {
-					results.push({
-						action: "recruit",
-						unitType: parts[1]!,
-						target: parts[2]!,
-					});
+				const unitType = parts[1];
+				const target = parts[2];
+				if (unitType && target) {
+					results.push({ action: "recruit", unitType, target });
 				}
 				break;
 			}
 			case "fortify": {
-				if (parts.length >= 2) {
-					results.push({
-						action: "fortify",
-						unitId: parts[1]!,
-					});
+				const unitId = parts[1];
+				if (unitId) {
+					results.push({ action: "fortify", unitId });
 				}
 				break;
 			}

@@ -22,7 +22,7 @@ describe("parseCommands", () => {
 		const input = "move A-1 E10\nend_turn\n---\nPushing forward to attack.";
 		const cmds = parseCommands(input);
 		expect(cmds).toHaveLength(2);
-		expect(cmds[0]!.action).toBe("move");
+		expect(cmds[0]?.action).toBe("move");
 	});
 
 	test("handles fortify command", () => {
