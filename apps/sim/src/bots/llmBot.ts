@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { getDiagnosticsCollector } from "../diagnostics/collector";
 import {
 	createOpenRouterClient,
 	isOpenRouterBaseUrl,
@@ -89,6 +90,8 @@ async function chooseTurn(
 			: buildShortSystemPrompt(side);
 	const user = buildCompactUserMessage(state, side, legalMoves);
 
+	const startTime = Date.now();
+	let apiError: string | undefined;
 	let content = "";
 
 	try {
@@ -109,7 +112,23 @@ async function chooseTurn(
 			]);
 		});
 		content = completion.choices?.[0]?.message?.content ?? "";
-	} catch {
+	} catch (e) {
+		apiError = e instanceof Error ? e.message : String(e);
+		getDiagnosticsCollector().logLlmCall({
+			timestamp: new Date().toISOString(),
+			botId,
+			model: config.model,
+			turn,
+			apiLatencyMs: Date.now() - startTime,
+			apiSuccess: false,
+			parsingSuccess: false,
+			usedRandomFallback: true,
+			commandsReturned: 0,
+			commandsMatched: 0,
+			commandsSkipped: 0,
+			responsePreview: "",
+			apiError,
+		});
 		return [{ action: "end_turn" }];
 	}
 
@@ -134,6 +153,29 @@ async function chooseTurn(
 	if (moves.length === 0) {
 		moves.push({ action: "end_turn" });
 	}
+
+	const commandsMatched = moves.length;
+	const commandsSkipped = parsed.commands.length - commandsMatched;
+	const usedRandomFallback =
+		moves.length === 1 &&
+		moves[0]?.action === "end_turn" &&
+		!parsed.commands.some((c) => c.action === "end_turn");
+
+	getDiagnosticsCollector().logLlmCall({
+		timestamp: new Date().toISOString(),
+		botId,
+		model: config.model,
+		turn,
+		apiLatencyMs: Date.now() - startTime,
+		apiSuccess: true,
+		parsingSuccess: parsed.commands.length > 0,
+		usedRandomFallback,
+		commandsReturned: parsed.commands.length,
+		commandsMatched,
+		commandsSkipped: commandsSkipped > 0 ? commandsSkipped : 0,
+		responsePreview: content.slice(0, 200),
+		reasoning: parsed.reasoning,
+	});
 
 	return moves;
 }
