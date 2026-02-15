@@ -4,6 +4,7 @@ import {
 } from "./diagnostics/collector";
 import { Engine } from "./engineAdapter";
 import { mulberry32 } from "./rng";
+import { createCombatScenario } from "./scenarios/combatScenarios";
 import type {
 	AgentId,
 	Bot,
@@ -24,6 +25,7 @@ export async function playMatch(opts: {
 	autofixIllegal?: boolean;
 	enableDiagnostics?: boolean;
 	engineConfig?: EngineConfigInput;
+	scenario?: "melee" | "ranged" | "stronghold_rush" | "midfield";
 }): Promise<MatchResult> {
 	const rng = mulberry32(opts.seed);
 	const playerIds = opts.players.map((p) => p.id);
@@ -44,11 +46,9 @@ export async function playMatch(opts: {
 		);
 	}
 
-	let state: MatchState = Engine.createInitialState(
-		opts.seed,
-		playerIds,
-		opts.engineConfig,
-	);
+	let state: MatchState = opts.scenario
+		? createCombatScenario(opts.seed, playerIds, opts.scenario)
+		: Engine.createInitialState(opts.seed, playerIds, opts.engineConfig);
 	let illegalMoves = 0;
 	const moves: Move[] = [];
 	const engineEvents: EngineEvent[] = [];

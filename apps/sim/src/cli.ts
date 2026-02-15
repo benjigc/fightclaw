@@ -160,6 +160,11 @@ async function main() {
 
 	const enableDiagnostics = !!argv.diagnostics;
 
+	const scenario =
+		typeof argv.scenario === "string"
+			? (argv.scenario as "melee" | "ranged" | "stronghold_rush" | "midfield")
+			: undefined;
+
 	if (cmd === "single") {
 		const result = await playMatch({
 			seed,
@@ -170,6 +175,7 @@ async function main() {
 			autofixIllegal: autofix,
 			enableDiagnostics,
 			engineConfig,
+			scenario,
 		});
 		if (logFile && result.log) {
 			writeFileSync(logFile, JSON.stringify(result.log));
@@ -369,6 +375,9 @@ async function main() {
 	console.error("Engine options:");
 	console.error("  --turnLimit N       Engine turn limit (default: 40)");
 	console.error("  --actionsPerTurn N  Actions per turn (default: 7)");
+	console.error(
+		"  --scenario NAME     Combat scenario: melee, ranged, stronghold_rush, midfield",
+	);
 	console.error("");
 	console.error("Bot options (for single, tourney, mass):");
 	console.error(
