@@ -1,6 +1,12 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import minimist from "minimist";
+import { replayBoardgameArtifact } from "./boardgameio/replay";
+import type {
+	HarnessMode,
+	InvalidPolicy,
+	MoveValidationMode,
+} from "./boardgameio/types";
 import { makeAggressiveBot } from "./bots/aggressiveBot";
 import { makeGreedyBot } from "./bots/greedyBot";
 import { makeLlmBot } from "./bots/llmBot";
@@ -159,6 +165,27 @@ async function main() {
 	});
 
 	const enableDiagnostics = !!argv.diagnostics;
+	const harness =
+		typeof argv.harness === "string" ? (argv.harness as HarnessMode) : "legacy";
+	const invalidPolicy =
+		typeof argv.invalidPolicy === "string"
+			? (argv.invalidPolicy as InvalidPolicy)
+			: "skip";
+	const moveValidationMode =
+		typeof argv.moveValidationMode === "string"
+			? (argv.moveValidationMode as MoveValidationMode)
+			: "strict";
+	const strict = !!argv.strict || process.env.HARNESS_STRICT === "1";
+	const artifactDir =
+		typeof argv.artifactDir === "string" ? argv.artifactDir : undefined;
+	const storeFullPrompt =
+		typeof argv.storeFullPrompt === "string"
+			? argv.storeFullPrompt !== "false"
+			: process.env.CI !== "true";
+	const storeFullOutput =
+		typeof argv.storeFullOutput === "string"
+			? argv.storeFullOutput !== "false"
+			: process.env.CI !== "true";
 
 	const scenario =
 		typeof argv.scenario === "string"
@@ -176,6 +203,13 @@ async function main() {
 			enableDiagnostics,
 			engineConfig,
 			scenario,
+			harness,
+			invalidPolicy,
+			moveValidationMode,
+			strict,
+			artifactDir,
+			storeFullPrompt,
+			storeFullOutput,
 		});
 		if (logFile && result.log) {
 			writeFileSync(logFile, JSON.stringify(result.log));
@@ -194,7 +228,10 @@ async function main() {
 			process.exit(1);
 		}
 		const payload = JSON.parse(readFileSync(logFile, "utf-8"));
-		const result = replayMatch(payload);
+		const result =
+			payload?.artifactVersion === 1
+				? replayBoardgameArtifact(payload)
+				: replayMatch(payload);
 		console.log(JSON.stringify(result, null, 2));
 		process.exit(result.ok ? 0 : 1);
 	}
@@ -208,6 +245,13 @@ async function main() {
 			players: [p1, p2],
 			autofixIllegal: autofix,
 			engineConfig,
+			harness,
+			invalidPolicy,
+			moveValidationMode,
+			strict,
+			artifactDir,
+			storeFullPrompt,
+			storeFullOutput,
 		});
 		console.log(JSON.stringify(summary, null, 2));
 		console.log(
@@ -242,7 +286,15 @@ async function main() {
 		}
 
 		const startTime = Date.now();
-		const stats = await runMassSimulation(options, [p1, p2], engineConfig);
+		const stats = await runMassSimulation(options, [p1, p2], engineConfig, {
+			harness,
+			invalidPolicy,
+			moveValidationMode,
+			strict,
+			artifactDir,
+			storeFullPrompt,
+			storeFullOutput,
+		});
 		const duration = (Date.now() - startTime) / 1000;
 
 		if (!quiet) {
@@ -377,6 +429,25 @@ async function main() {
 	console.error("  --actionsPerTurn N  Actions per turn (default: 7)");
 	console.error(
 		"  --scenario NAME     Combat scenario: melee, ranged, stronghold_rush, midfield",
+	);
+	console.error(
+		"  --harness MODE      Runner harness: legacy, boardgameio (default: legacy)",
+	);
+	console.error(
+		"  --invalidPolicy P   Invalid command policy: skip, stop_turn, forfeit",
+	);
+	console.error(
+		"  --moveValidationMode M  Move validation mode: strict, relaxed (default: strict)",
+	);
+	console.error("  --strict            Fail on harness divergence checks");
+	console.error(
+		"  --artifactDir PATH  Boardgame harness artifact output directory",
+	);
+	console.error(
+		"  --storeFullPrompt B Store full prompts in artifacts (true|false)",
+	);
+	console.error(
+		"  --storeFullOutput B Store full model output in artifacts (true|false)",
 	);
 	console.error("");
 	console.error("Bot options (for single, tourney, mass):");

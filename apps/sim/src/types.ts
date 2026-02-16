@@ -50,4 +50,15 @@ export type Bot = {
 		turn: number;
 		rng: () => number;
 	}) => Promise<Move[]>;
+	chooseTurnWithMeta?: (ctx: {
+		state: MatchState;
+		legalMoves: Move[];
+		turn: number;
+		rng: () => number;
+	}) => Promise<{
+		moves: Move[];
+		prompt?: string;
+		rawOutput?: string;
+		model?: string;
+	}>;
 };

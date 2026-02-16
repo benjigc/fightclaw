@@ -3,6 +3,12 @@
  * Runs as a child process via child_process.fork() — inherits tsx loader
  * from the parent's process.execArgv automatically.
  */
+
+import type {
+	HarnessMode,
+	InvalidPolicy,
+	MoveValidationMode,
+} from "../boardgameio/types";
 import { makeAggressiveBot } from "../bots/aggressiveBot";
 import { makeGreedyBot } from "../bots/greedyBot";
 import type { MockLlmConfig } from "../bots/mockLlmBot";
@@ -25,6 +31,15 @@ interface BatchRequest {
 	maxTurns: number;
 	botConfigs: BotConfig[];
 	engineConfig?: EngineConfigInput;
+	harnessOptions?: {
+		harness?: HarnessMode;
+		invalidPolicy?: InvalidPolicy;
+		moveValidationMode?: MoveValidationMode;
+		strict?: boolean;
+		artifactDir?: string;
+		storeFullPrompt?: boolean;
+		storeFullOutput?: boolean;
+	};
 }
 
 interface BatchResponse {
@@ -75,6 +90,13 @@ process.on("message", async (msg: WorkerMessage) => {
 					record: false,
 					autofixIllegal: true,
 					engineConfig: msg.engineConfig,
+					harness: msg.harnessOptions?.harness,
+					invalidPolicy: msg.harnessOptions?.invalidPolicy,
+					moveValidationMode: msg.harnessOptions?.moveValidationMode,
+					strict: msg.harnessOptions?.strict,
+					artifactDir: msg.harnessOptions?.artifactDir,
+					storeFullPrompt: msg.harnessOptions?.storeFullPrompt,
+					storeFullOutput: msg.harnessOptions?.storeFullOutput,
 				});
 				results.push(result);
 			}

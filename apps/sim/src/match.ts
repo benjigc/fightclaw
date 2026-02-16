@@ -1,3 +1,10 @@
+import { playMatchBoardgameIO } from "./boardgameio/runner";
+import type {
+	HarnessMode,
+	InvalidPolicy,
+	MoveValidationMode,
+	ScenarioName,
+} from "./boardgameio/types";
 import {
 	getDiagnosticsCollector,
 	resetDiagnosticsCollector,
@@ -25,7 +32,46 @@ export async function playMatch(opts: {
 	autofixIllegal?: boolean;
 	enableDiagnostics?: boolean;
 	engineConfig?: EngineConfigInput;
-	scenario?: "melee" | "ranged" | "stronghold_rush" | "midfield";
+	scenario?: ScenarioName;
+	harness?: HarnessMode;
+	invalidPolicy?: InvalidPolicy;
+	strict?: boolean;
+	moveValidationMode?: MoveValidationMode;
+	artifactDir?: string;
+	storeFullPrompt?: boolean;
+	storeFullOutput?: boolean;
+}): Promise<MatchResult> {
+	if (opts.harness === "boardgameio") {
+		return playMatchBoardgameIO({
+			seed: opts.seed,
+			players: opts.players,
+			maxTurns: opts.maxTurns,
+			verbose: opts.verbose,
+			record: opts.record,
+			enableDiagnostics: opts.enableDiagnostics,
+			engineConfig: opts.engineConfig,
+			scenario: opts.scenario,
+			invalidPolicy: opts.invalidPolicy ?? "skip",
+			strict: opts.strict ?? process.env.HARNESS_STRICT === "1",
+			moveValidationMode: opts.moveValidationMode ?? "strict",
+			artifactDir: opts.artifactDir,
+			storeFullPrompt: opts.storeFullPrompt ?? process.env.CI !== "true",
+			storeFullOutput: opts.storeFullOutput ?? process.env.CI !== "true",
+		});
+	}
+	return playMatchLegacy(opts);
+}
+
+async function playMatchLegacy(opts: {
+	seed: number;
+	players: Bot[]; // turn order
+	maxTurns: number;
+	verbose?: boolean;
+	record?: boolean;
+	autofixIllegal?: boolean;
+	enableDiagnostics?: boolean;
+	engineConfig?: EngineConfigInput;
+	scenario?: ScenarioName;
 }): Promise<MatchResult> {
 	const rng = mulberry32(opts.seed);
 	const playerIds = opts.players.map((p) => p.id);

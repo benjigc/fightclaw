@@ -3,9 +3,24 @@ import { fork } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import type {
+	HarnessMode,
+	InvalidPolicy,
+	MoveValidationMode,
+} from "../boardgameio/types";
 import type { SimulationOptions, SimulationStats } from "../simulation/config";
 import type { Bot, EngineConfigInput, MatchResult } from "../types";
 import type { BotConfig } from "./forkWorker";
+
+interface HarnessRunOptions {
+	harness?: HarnessMode;
+	invalidPolicy?: InvalidPolicy;
+	moveValidationMode?: MoveValidationMode;
+	strict?: boolean;
+	artifactDir?: string;
+	storeFullPrompt?: boolean;
+	storeFullOutput?: boolean;
+}
 
 interface Checkpoint {
 	completedSeeds: number[];
@@ -226,6 +241,7 @@ function runWorkerBatch(
 	maxTurns: number,
 	botConfigs: BotConfig[],
 	engineConfig?: EngineConfigInput,
+	harnessOptions?: HarnessRunOptions,
 ): Promise<MatchResult[]> {
 	return new Promise((resolve, reject) => {
 		const timeout = setTimeout(() => {
@@ -257,6 +273,7 @@ function runWorkerBatch(
 			maxTurns,
 			botConfigs,
 			engineConfig,
+			harnessOptions,
 		});
 	});
 }
@@ -265,6 +282,7 @@ export async function runMassSimulation(
 	options: SimulationOptions,
 	players: [Bot, Bot],
 	engineConfig?: EngineConfigInput,
+	harnessOptions?: HarnessRunOptions,
 ): Promise<SimulationStats> {
 	const totalGames = options.games;
 	const playerIds = players.map((p) => String(p.id));
@@ -345,6 +363,13 @@ export async function runMassSimulation(
 					record: false,
 					autofixIllegal: true,
 					engineConfig,
+					harness: harnessOptions?.harness,
+					invalidPolicy: harnessOptions?.invalidPolicy,
+					moveValidationMode: harnessOptions?.moveValidationMode,
+					strict: harnessOptions?.strict,
+					artifactDir: harnessOptions?.artifactDir,
+					storeFullPrompt: harnessOptions?.storeFullPrompt,
+					storeFullOutput: harnessOptions?.storeFullOutput,
 				});
 				batchResults.push(result);
 				completedSeedSet.add(seed);
@@ -409,6 +434,7 @@ export async function runMassSimulation(
 								options.maxTurns,
 								botConfigs,
 								engineConfig,
+								harnessOptions,
 							);
 
 							for (const result of results) {

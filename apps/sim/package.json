@@ -13,6 +13,7 @@
 	},
 	"dependencies": {
 		"@fightclaw/engine": "workspace:*",
+		"boardgame.io": "^0.50.2",
 		"minimist": "^1.2.8",
 		"openai": "^6.18.0",
 		"zod": "^3.24.1"
