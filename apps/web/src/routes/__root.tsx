@@ -58,7 +58,7 @@ function RootComponent() {
 				<Outlet />
 			</div>
 			<Toaster richColors theme="dark" />
-			<TanStackRouterDevtools position="bottom-left" />
+			<TanStackRouterDevtools position="bottom-right" />
 		</>
 	);
 }
