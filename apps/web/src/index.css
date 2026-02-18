@@ -137,14 +137,15 @@
 	--spectator-muted: #86a7a3;
 	--spectator-accent: #4de3c2;
 	--spectator-glow: rgba(77, 227, 194, 0.3);
+	--mono:
+		"JetBrains Mono", "IBM Plex Mono", "Source Code Pro", ui-monospace,
+		SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+		monospace;
 	height: 100svh;
 	overflow: hidden;
 	background-color: var(--spectator-bg);
 	color: var(--spectator-text);
-	font-family:
-		"JetBrains Mono", "IBM Plex Mono", "Source Code Pro", ui-monospace,
-		SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-		monospace;
+	font-family: var(--mono);
 	letter-spacing: 0.02em;
 	position: relative;
 	display: flex;
@@ -185,10 +186,7 @@
 	align-items: center;
 	justify-content: space-between;
 	padding: 0 16px;
-	font-family:
-		"JetBrains Mono", "IBM Plex Mono", "Source Code Pro", ui-monospace,
-		SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-		monospace;
+	font-family: var(--mono);
 	font-size: 0.75rem;
 	border-bottom: 1px dashed var(--spectator-border);
 	background: var(--spectator-bg);
@@ -221,10 +219,7 @@
 .thought-panel-placeholder {
 	background: rgba(5, 11, 16, 0.85);
 	padding: 12px;
-	font-family:
-		"JetBrains Mono", "IBM Plex Mono", "Source Code Pro", ui-monospace,
-		SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-		monospace;
+	font-family: var(--mono);
 	font-size: 0.7rem;
 	overflow: hidden;
 }

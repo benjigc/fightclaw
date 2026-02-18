@@ -11,6 +11,7 @@ export type ParsedCommand =
 	| { action: "attack"; unitId: string; target: string }
 	| { action: "recruit"; unitType: string; target: string }
 	| { action: "fortify"; unitId: string }
+	| { action: "upgrade"; unitId: string }
 	| { action: "end_turn" };
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,7 @@ export function parseCommandsWithReasoning(text: string): {
  *   ParsedCommand.target  ->  Move.to      (for "move")
  *   ParsedCommand.target  ->  Move.target   (for "attack")
  *   ParsedCommand.target  ->  Move.at       (for "recruit")
+ *   ParsedCommand.unitId  ->  Move.unitId   (for "fortify"/"upgrade")
  */
 export function matchCommand(
 	cmd: ParsedCommand,
@@ -85,6 +87,11 @@ export function matchCommand(
 			}
 			case "fortify": {
 				const m = move as Extract<Move, { action: "fortify" }>;
+				if (m.unitId === cmd.unitId) return move;
+				break;
+			}
+			case "upgrade": {
+				const m = move as Extract<Move, { action: "upgrade" }>;
 				if (m.unitId === cmd.unitId) return move;
 				break;
 			}
@@ -173,6 +180,13 @@ function parseLines(text: string): ParsedCommand[] {
 				const unitId = cleanToken(parts[1]);
 				if (unitId) {
 					results.push({ action: "fortify", unitId });
+				}
+				break;
+			}
+			case "upgrade": {
+				const unitId = cleanToken(parts[1]);
+				if (unitId) {
+					results.push({ action: "upgrade", unitId });
 				}
 				break;
 			}

@@ -19,6 +19,13 @@ type ArtifactTurn = {
 	playerID: string;
 	prompt?: string;
 	rawOutput?: string;
+	metricsV2?: {
+		upgrade?: {
+			upgradesAccepted?: number;
+			estimatedGoldSpend?: number;
+			estimatedWoodSpend?: number;
+		};
+	};
 	commandAttempts: Array<{
 		accepted: boolean;
 		rejectionReason?: string;
@@ -77,6 +84,19 @@ type BehaviorSummary = {
 		gamesWithAcceptedMoves: number;
 		avgUniqueActions: number;
 		avgShannonEntropy: number;
+	};
+	actionProfile: {
+		acceptedActionCounts: Record<string, number>;
+		normalizedAcceptedActions: Record<string, number>;
+	};
+	upgradeEconomy: {
+		gamesWithUpgrade: number;
+		upgradeAdoptionRate: number;
+		totalUpgradesAccepted: number;
+		avgUpgradesPerGame: number;
+		meanFirstUpgradeTurn: number | null;
+		avgEstimatedUpgradeGoldSpendPerGame: number;
+		avgEstimatedUpgradeWoodSpendPerGame: number;
 	};
 	telemetryCoverage: {
 		turns: number;
@@ -194,6 +214,12 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 	let gamesWithAcceptedMoves = 0;
 	const uniqueActionCounts: number[] = [];
 	const entropies: number[] = [];
+	const acceptedActionCounts = new Map<string, number>();
+	let gamesWithUpgrade = 0;
+	let totalUpgradesAccepted = 0;
+	let totalEstimatedUpgradeGoldSpend = 0;
+	let totalEstimatedUpgradeWoodSpend = 0;
+	const firstUpgradeTurns: number[] = [];
 	let turns = 0;
 	let turnsWithPrompt = 0;
 	let turnsWithRawOutput = 0;
@@ -202,11 +228,20 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 	for (const file of files) {
 		const artifact = JSON.parse(readFileSync(file, "utf-8")) as Artifact;
 		illegalMoves += artifact.result?.illegalMoves ?? 0;
+		let gameHasUpgrade = false;
+		let gameFirstUpgradeTurn: number | null = null;
+		let gameUpgradeCount = 0;
+		let gameUpgradeGoldSpend = 0;
+		let gameUpgradeWoodSpend = 0;
 
 		const actionCounts = new Map<string, number>();
 		for (const mv of artifact.acceptedMoves ?? []) {
 			const action = mv.engineMove?.action ?? "unknown";
 			actionCounts.set(action, (actionCounts.get(action) ?? 0) + 1);
+			acceptedActionCounts.set(
+				action,
+				(acceptedActionCounts.get(action) ?? 0) + 1,
+			);
 		}
 		if (actionCounts.size > 0) {
 			gamesWithAcceptedMoves++;
@@ -244,6 +279,29 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 				)
 			) {
 				turnsWithReasoningField++;
+			}
+
+			const metricsUpgrade = turn.metricsV2?.upgrade;
+			const upgradesAcceptedFromMetrics = metricsUpgrade?.upgradesAccepted ?? 0;
+			if (upgradesAcceptedFromMetrics > 0) {
+				gameHasUpgrade = true;
+				gameUpgradeCount += upgradesAcceptedFromMetrics;
+				gameUpgradeGoldSpend += metricsUpgrade?.estimatedGoldSpend ?? 0;
+				gameUpgradeWoodSpend += metricsUpgrade?.estimatedWoodSpend ?? 0;
+				if (gameFirstUpgradeTurn === null) {
+					gameFirstUpgradeTurn = i + 1;
+				}
+			} else {
+				const upgradesAcceptedFromAttempts = turn.commandAttempts.filter(
+					(a) => a.accepted && a.move.action === "upgrade",
+				).length;
+				if (upgradesAcceptedFromAttempts > 0) {
+					gameHasUpgrade = true;
+					gameUpgradeCount += upgradesAcceptedFromAttempts;
+					if (gameFirstUpgradeTurn === null) {
+						gameFirstUpgradeTurn = i + 1;
+					}
+				}
 			}
 
 			const before = parsedStates[i];
@@ -319,6 +377,16 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 			}
 		}
 
+		if (gameHasUpgrade) {
+			gamesWithUpgrade++;
+			totalUpgradesAccepted += gameUpgradeCount;
+			totalEstimatedUpgradeGoldSpend += gameUpgradeGoldSpend;
+			totalEstimatedUpgradeWoodSpend += gameUpgradeWoodSpend;
+			if (gameFirstUpgradeTurn !== null) {
+				firstUpgradeTurns.push(gameFirstUpgradeTurn);
+			}
+		}
+
 		for (const side of ["A", "B"] as const) {
 			const series = sideTurns[side]
 				.sort((a, b) => a.idx - b.idx)
@@ -341,6 +409,24 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 			}
 		}
 	}
+
+	const acceptedActionTotal = Array.from(acceptedActionCounts.values()).reduce(
+		(sum, value) => sum + value,
+		0,
+	);
+	const acceptedActionCountsObj = Object.fromEntries(
+		Array.from(acceptedActionCounts.entries()).sort((a, b) =>
+			a[0].localeCompare(b[0]),
+		),
+	);
+	const normalizedAcceptedActions = Object.fromEntries(
+		Array.from(acceptedActionCounts.entries())
+			.sort((a, b) => a[0].localeCompare(b[0]))
+			.map(([action, count]) => [
+				action,
+				acceptedActionTotal > 0 ? count / acceptedActionTotal : 0,
+			]),
+	);
 
 	return {
 		games: files.length,
@@ -384,6 +470,24 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 			avgUniqueActions:
 				uniqueActionCounts.length > 0 ? mean(uniqueActionCounts) : 0,
 			avgShannonEntropy: entropies.length > 0 ? mean(entropies) : 0,
+		},
+		actionProfile: {
+			acceptedActionCounts: acceptedActionCountsObj,
+			normalizedAcceptedActions,
+		},
+		upgradeEconomy: {
+			gamesWithUpgrade,
+			upgradeAdoptionRate:
+				files.length > 0 ? gamesWithUpgrade / files.length : 0,
+			totalUpgradesAccepted,
+			avgUpgradesPerGame:
+				files.length > 0 ? totalUpgradesAccepted / files.length : 0,
+			meanFirstUpgradeTurn:
+				firstUpgradeTurns.length > 0 ? mean(firstUpgradeTurns) : null,
+			avgEstimatedUpgradeGoldSpendPerGame:
+				files.length > 0 ? totalEstimatedUpgradeGoldSpend / files.length : 0,
+			avgEstimatedUpgradeWoodSpendPerGame:
+				files.length > 0 ? totalEstimatedUpgradeWoodSpend / files.length : 0,
 		},
 		telemetryCoverage: {
 			turns,

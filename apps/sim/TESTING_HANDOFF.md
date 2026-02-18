@@ -5,6 +5,11 @@ Date: 2026-02-17
 ## Goal
 Iteratively balance gameplay so prompt-driven strategies are distinct and watchable, while avoiding stalled/draw-heavy matches.
 
+## Active Runtime Defaults (API Lane)
+- Board size: `17x9` (`--boardColumns 17`).
+- LLM turn planning: parallel API fanout enabled (`--llmParallelCalls 2`).
+- Rationale: shorter path-to-contact + lower per-turn latency.
+
 ## Lanes
 - Fast lane: mock-LLM bots, high volume, rapid A/B screening.
 - API lane: real LLM calls (OpenRouter, `openai/gpt-4o-mini`), lower volume, realism check.
@@ -43,7 +48,7 @@ Iteratively balance gameplay so prompt-driven strategies are distinct and watcha
    - scenarios: `midfield`, `melee`, `all_infantry`, `all_cavalry`
    - pairs: `strategic/defensive`, `defensive/strategic`, `strategic/aggressive`, `aggressive/strategic`, `aggressive/defensive`, `defensive/aggressive`, `defensive/defensive`
    - 4 games per pair per scenario
-   - `--harness boardgameio --maxTurns 180`
+   - `--harness boardgameio --boardColumns 17 --maxTurns 180`
 4. Compare vs Stage A and B3:
    - draws
    - mean turns
@@ -65,6 +70,10 @@ Iteratively balance gameplay so prompt-driven strategies are distinct and watcha
 
 ## Useful Commands
 - Single API test:
-  - `pnpm -C apps/sim exec tsx src/cli.ts single --harness boardgameio --bot1 llm --bot2 llm --model1 openai/gpt-4o-mini --model2 openai/gpt-4o-mini --scenario midfield --maxTurns 180`
+  - `pnpm -C apps/sim exec tsx src/cli.ts single --harness boardgameio --boardColumns 17 --bot1 llm --bot2 llm --model1 openai/gpt-4o-mini --model2 openai/gpt-4o-mini --llmParallelCalls 2 --scenario midfield --maxTurns 180`
+- Locked benchmark profile (fast lane, reproducible):
+  - `pnpm -C apps/sim run benchmark:v1`
+- Locked benchmark profile (fast + API spot-check):
+  - `set -a; source .env; set +a; pnpm -C apps/sim run benchmark:v1:api`
 - Behavior metrics:
   - `pnpm -C apps/sim exec tsx src/cli.ts behavior --input <artifacts_or_results_dir> --output <dir>/behavior-metrics.json`

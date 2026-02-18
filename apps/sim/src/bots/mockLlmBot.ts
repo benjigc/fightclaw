@@ -34,6 +34,7 @@ const actionScores: Record<string, Record<Move["action"], number>> = {
 		move: 70,
 		recruit: 35,
 		fortify: 15,
+		upgrade: 48,
 		end_turn: -20,
 		pass: -20,
 	},
@@ -42,6 +43,7 @@ const actionScores: Record<string, Record<Move["action"], number>> = {
 		recruit: 70,
 		move: 45,
 		attack: 57,
+		upgrade: 62,
 		end_turn: 5,
 		pass: 0,
 	},
@@ -50,6 +52,7 @@ const actionScores: Record<string, Record<Move["action"], number>> = {
 		move: 72,
 		recruit: 60,
 		fortify: 35,
+		upgrade: 58,
 		end_turn: 0,
 		pass: 0,
 	},
@@ -58,6 +61,7 @@ const actionScores: Record<string, Record<Move["action"], number>> = {
 		move: 82,
 		recruit: 62,
 		fortify: 28,
+		upgrade: 66,
 		end_turn: -5,
 		pass: -5,
 	},
@@ -149,8 +153,20 @@ function isAllCavalryMirror(state: MatchState): boolean {
 	const b = state.players.B.units;
 	if (a.length === 0 || b.length === 0) return false;
 	return (
-		a.every((u) => u.type === "cavalry") && b.every((u) => u.type === "cavalry")
+		a.every((u) => isCavalryLine(u.type)) &&
+		b.every((u) => isCavalryLine(u.type))
 	);
+}
+
+function isCavalryLine(unitType: string): boolean {
+	return unitType === "cavalry" || unitType === "knight";
+}
+
+function archetypeUnit(unitType: string): "infantry" | "cavalry" | "archer" {
+	if (unitType === "swordsman") return "infantry";
+	if (unitType === "knight") return "cavalry";
+	if (unitType === "crossbow") return "archer";
+	return unitType as "infantry" | "cavalry" | "archer";
 }
 
 function friendlyUnitsAtHex(state: MatchState, side: "A" | "B", hexId: string) {
@@ -164,12 +180,14 @@ function hexTypeAt(state: MatchState, hexId: string): string | null {
 }
 
 function matchupBonus(attackerType: string, defenderType: string): number {
-	if (attackerType === "infantry" && defenderType === "cavalry") return 10;
-	if (attackerType === "cavalry" && defenderType === "archer") return 10;
-	if (attackerType === "archer" && defenderType === "infantry") return 10;
-	if (attackerType === "infantry" && defenderType === "archer") return -6;
-	if (attackerType === "cavalry" && defenderType === "infantry") return -6;
-	if (attackerType === "archer" && defenderType === "cavalry") return -6;
+	const attacker = archetypeUnit(attackerType);
+	const defender = archetypeUnit(defenderType);
+	if (attacker === "infantry" && defender === "cavalry") return 10;
+	if (attacker === "cavalry" && defender === "archer") return 10;
+	if (attacker === "archer" && defender === "infantry") return 10;
+	if (attacker === "infantry" && defender === "archer") return -6;
+	if (attacker === "cavalry" && defender === "infantry") return -6;
+	if (attacker === "archer" && defender === "cavalry") return -6;
 	return 0;
 }
 
@@ -253,6 +271,19 @@ function scoreMoveContext(
 					: state.players.B.units.length;
 			return ownUnits < 4 ? 20 : 0;
 		}
+		case "upgrade": {
+			const unit = findUnit(state, move.unitId);
+			if (!unit) return 0;
+			const baseBonus =
+				unit.type === "infantry"
+					? 20
+					: unit.type === "cavalry"
+						? 24
+						: unit.type === "archer"
+							? 22
+							: 0;
+			return strategicWeight(baseBonus, strategy);
+		}
 		default:
 			return 0;
 	}
@@ -268,6 +299,7 @@ function scoreMoveForStrategy(
 	state: MatchState,
 	side: "A" | "B",
 	strategy: "aggressive" | "defensive" | "random" | "strategic",
+	turn: number,
 	promptIntents: PromptIntents,
 	hasPlayableAlternatives: boolean,
 ): number {
@@ -287,11 +319,14 @@ function scoreMoveForStrategy(
 	if (promptIntents.attack && move.action === "attack") score += 65;
 	if (promptIntents.defend && move.action === "fortify") score += 30;
 	if (promptIntents.defend && move.action === "recruit") score += 15;
+	if (promptIntents.defend && move.action === "upgrade") score += 8;
 	if (promptIntents.recruit && move.action === "recruit") score += 25;
+	if (promptIntents.recruit && move.action === "upgrade") score += 18;
 	if (promptIntents.advance && move.action === "move") score += 20;
 	if (promptIntents.advance && move.action === "attack") score += 10;
 
 	score += scoreMoveContext(move, state, side, strategy);
+	score += scoreUpgradeTiming(move, state, side, strategy, turn);
 
 	if (strategy === "strategic" && cavalryMirror) {
 		if (move.action === "recruit") score += 18;
@@ -311,6 +346,54 @@ function scoreMoveForStrategy(
 		score -= 100;
 	}
 
+	return score;
+}
+
+function scoreUpgradeTiming(
+	move: Move,
+	state: MatchState,
+	side: "A" | "B",
+	strategy: "aggressive" | "defensive" | "random" | "strategic",
+	turn: number,
+): number {
+	if (move.action !== "upgrade" || strategy === "random") return 0;
+	const unit = findUnit(state, move.unitId);
+	if (!unit) return 0;
+	if (
+		unit.type !== "infantry" &&
+		unit.type !== "cavalry" &&
+		unit.type !== "archer"
+	) {
+		return -20;
+	}
+	const own = side === "A" ? state.players.A : state.players.B;
+	const enemy = side === "A" ? state.players.B : state.players.A;
+	const resLead = own.gold + own.wood - (enemy.gold + enemy.wood);
+
+	if (strategy === "aggressive") {
+		if (turn <= 10) {
+			if (unit.type === "cavalry") return 38;
+			return 14;
+		}
+		if (turn <= 20) return unit.type === "cavalry" ? 18 : 8;
+		return -8;
+	}
+
+	if (strategy === "defensive") {
+		if (turn <= 9) return -16;
+		if (turn <= 22) {
+			if (unit.type === "infantry" || unit.type === "archer") return 24;
+			return 10;
+		}
+		return 6;
+	}
+
+	// strategic
+	let score = 0;
+	if (turn >= 8 && turn <= 24) score += 18;
+	if (resLead >= 6) score += 10;
+	if (unit.type === "infantry") score += 8;
+	if (unit.type === "archer") score += 6;
 	return score;
 }
 
@@ -338,7 +421,7 @@ export function makeMockLlmBot(id: string, config: MockLlmConfig = {}): Bot {
 		name:
 			fileConfig?.botId ??
 			`MockLLM[strategy=${effectiveStrategy},prompt=${promptTag}]`,
-		chooseMove: async ({ legalMoves, rng, state }) => {
+		chooseMove: async ({ legalMoves, rng, state, turn }) => {
 			if (effectiveStrategy === "random") {
 				return pickOne(legalMoves, rng);
 			}
@@ -356,6 +439,7 @@ export function makeMockLlmBot(id: string, config: MockLlmConfig = {}): Bot {
 					state,
 					side,
 					effectiveStrategy,
+					turn,
 					promptIntents,
 					hasPlayableAlternatives,
 				);

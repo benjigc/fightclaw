@@ -9,6 +9,10 @@
 		"sim:mass": "tsx src/cli.ts mass --output ./results",
 		"sim:analyze": "tsx src/cli.ts analyze --input ./results",
 		"sim:dashboard": "tsx src/cli.ts dashboard --input ./results",
+		"benchmark:v1": "tsx scripts/benchmark-v1.ts",
+		"benchmark:v1:api": "tsx scripts/benchmark-v1.ts --withApi",
+		"benchmark:v2": "tsx scripts/benchmark-v2.ts",
+		"benchmark:v2:api": "tsx scripts/benchmark-v2.ts --withApi",
 		"test": "bun test"
 	},
 	"dependencies": {

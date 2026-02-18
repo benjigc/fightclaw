@@ -60,3 +60,9 @@ FUTURE_FIXES.md
 /index.ts
 project docs/*
 !project docs/war-of-attrition-rules.md
+
+# Test artifacts
+**/diagnostics/
+**/results_low_quality/
+**/results/
+**/test-artifacts/

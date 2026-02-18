@@ -1,13 +1,12 @@
 import {
 	applyMove,
-	initialState,
+	createInitialState,
 	listLegalMoves,
 	type MatchState,
 	type Move,
 } from "@fightclaw/engine";
-import { env } from "@fightclaw/env/web";
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { HexBoard } from "@/components/arena/hex-board";
 import { Button } from "@/components/ui/button";
@@ -22,86 +21,6 @@ export const Route = createFileRoute("/dev")({
 });
 
 function DevConsole() {
-	const [authToken, setAuthToken] = useState("");
-	const [matchId, setMatchId] = useState<string | null>(null);
-	const [stateVersion, setStateVersion] = useState(0);
-	const [response, setResponse] = useState<unknown>(null);
-	const [busy, setBusy] = useState(false);
-
-	useEffect(() => {
-		const stored = window.localStorage.getItem("fightclaw.devAgentKey");
-		if (stored) setAuthToken(stored);
-	}, []);
-
-	useEffect(() => {
-		if (!authToken) return;
-		window.localStorage.setItem("fightclaw.devAgentKey", authToken);
-	}, [authToken]);
-
-	const queueMatch = async () => {
-		setBusy(true);
-		try {
-			const res = await fetch(`${env.VITE_SERVER_URL}/v1/matches/queue`, {
-				method: "POST",
-			});
-			const json = (await res.json()) as { matchId?: string };
-			if (json.matchId) {
-				setMatchId(json.matchId);
-				setStateVersion(0);
-			}
-			setResponse(json);
-		} catch (error) {
-			setResponse({ error: (error as Error).message ?? "Queue failed." });
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	const submitDummyMove = async () => {
-		if (!matchId) {
-			setResponse({ error: "Queue a match first." });
-			return;
-		}
-		if (!authToken) {
-			setResponse({ error: "Set DEV agent key first." });
-			return;
-		}
-		setBusy(true);
-		try {
-			const res = await fetch(
-				`${env.VITE_SERVER_URL}/v1/matches/${matchId}/move`,
-				{
-					method: "POST",
-					headers: {
-						authorization: `Bearer ${authToken}`,
-						"content-type": "application/json",
-					},
-					body: JSON.stringify({
-						moveId: crypto.randomUUID(),
-						expectedVersion: stateVersion,
-						move: { action: "ping", at: new Date().toISOString() },
-					}),
-				},
-			);
-			const json = (await res.json()) as {
-				ok?: boolean;
-				state?: { stateVersion?: number };
-				stateVersion?: number;
-			};
-			if (json.ok && json.state?.stateVersion !== undefined) {
-				setStateVersion(json.state.stateVersion);
-			}
-			if (!json.ok && json.stateVersion !== undefined) {
-				setStateVersion(json.stateVersion);
-			}
-			setResponse(json);
-		} catch (error) {
-			setResponse({ error: (error as Error).message ?? "Move failed." });
-		} finally {
-			setBusy(false);
-		}
-	};
-
 	if (!import.meta.env.DEV) {
 		return (
 			<div className="container mx-auto max-w-3xl px-4 py-6">
@@ -114,43 +33,17 @@ function DevConsole() {
 	}
 
 	return (
-		<div className="container mx-auto max-w-3xl px-4 py-6">
-			<h1 className="font-semibold text-lg">Dev Console</h1>
-			<p className="text-muted-foreground text-sm">
-				Operator controls for internal testing.
-			</p>
-			<section className="mt-6 grid gap-4 rounded-lg border p-4">
-				<div className="grid gap-2">
-					<label className="font-medium text-sm" htmlFor="dev-agent-key">
-						DEV Agent Key
-					</label>
-					<Input
-						id="dev-agent-key"
-						placeholder="Paste DEV_AGENT_KEY"
-						value={authToken}
-						onChange={(event) => setAuthToken(event.target.value)}
-					/>
-				</div>
-				<div className="flex flex-wrap gap-2">
-					<Button type="button" onClick={queueMatch} disabled={busy}>
-						Queue Match
-					</Button>
-					<Button
-						type="button"
-						variant="secondary"
-						onClick={submitDummyMove}
-						disabled={busy}
-					>
-						Submit Dummy Move
-					</Button>
-				</div>
-				<div className="text-muted-foreground text-xs">
-					Match: {matchId ?? "-"} · stateVersion: {stateVersion}
-				</div>
-				<pre className="max-h-72 overflow-auto rounded-md bg-muted p-3 text-xs">
-					{response ? JSON.stringify(response, null, 2) : "No response yet."}
-				</pre>
-			</section>
+		<div className="mx-auto w-full max-w-[1700px] px-4 py-4 md:px-6 md:py-6">
+			<header className="mb-4 rounded-xl border border-border/70 bg-card/70 p-4 backdrop-blur">
+				<p className="text-[11px] text-muted-foreground uppercase tracking-[0.2em]">
+					Spectate Sandbox
+				</p>
+				<h1 className="mt-1 font-semibold text-2xl">Live Spectate Preview</h1>
+				<p className="text-muted-foreground text-sm">
+					Board-first layout for testing spectator readability, scale, and HUD
+					density.
+				</p>
+			</header>
 			<BoardPreview />
 		</div>
 	);
@@ -158,8 +51,13 @@ function DevConsole() {
 
 function BoardPreview() {
 	const [seed, setSeed] = useState(42);
+	const createPreviewState = useCallback(
+		(s: number) =>
+			createInitialState(s, { boardColumns: 17 }, ["dev-a", "dev-b"]),
+		[],
+	);
 	const [boardState, setBoardState] = useState<MatchState>(() =>
-		initialState(seed, ["dev-a", "dev-b"]),
+		createPreviewState(seed),
 	);
 	const [moveCount, setMoveCount] = useState(0);
 
@@ -177,10 +75,10 @@ function BoardPreview() {
 	const resetBoard = useCallback(
 		(s: number) => {
 			resetAnimator();
-			setBoardState(initialState(s, ["dev-a", "dev-b"]));
+			setBoardState(createPreviewState(s));
 			setMoveCount(0);
 		},
-		[resetAnimator],
+		[createPreviewState, resetAnimator],
 	);
 
 	const legalMoves = useMemo(() => listLegalMoves(boardState), [boardState]);
@@ -241,69 +139,84 @@ function BoardPreview() {
 	);
 
 	return (
-		<section className="mt-6 grid gap-4 rounded-lg border p-4">
-			<h2 className="font-medium text-sm">Board Preview</h2>
-			<div className="flex flex-wrap items-end gap-2">
-				<div className="grid gap-1">
-					<label className="text-muted-foreground text-xs" htmlFor="board-seed">
-						Seed
-					</label>
-					<Input
-						id="board-seed"
-						type="number"
-						className="w-24"
-						value={seed}
-						onChange={(e) => setSeed(Number(e.target.value) || 0)}
+		<section className="mx-auto grid w-full max-w-[1500px] gap-3 rounded-xl border border-border/70 bg-card/70 p-4">
+			<div className="flex flex-wrap items-start justify-between gap-3">
+				<div>
+					<p className="text-[11px] text-muted-foreground uppercase tracking-[0.18em]">
+						Arena View
+					</p>
+					<h2 className="font-semibold text-lg">Board: 17x9</h2>
+					<p className="text-muted-foreground text-xs">
+						Turn {boardState.turn} | Active {boardState.activePlayer} | AP{" "}
+						{boardState.actionsRemaining} | Moves {moveCount} |{" "}
+						{boardState.status}
+						{hudFx.passPulse ? " | PASS" : ""}
+					</p>
+				</div>
+				<div className="grid gap-2 sm:grid-cols-[auto_auto_auto]">
+					<div className="grid gap-1">
+						<label
+							className="text-muted-foreground text-xs"
+							htmlFor="board-seed"
+						>
+							Seed
+						</label>
+						<Input
+							id="board-seed"
+							type="number"
+							className="h-8 w-24"
+							value={seed}
+							onChange={(e) => setSeed(Number(e.target.value) || 0)}
+						/>
+					</div>
+					<Button
+						type="button"
+						variant="secondary"
+						size="sm"
+						className="self-end"
+						onClick={() => resetBoard(seed)}
+					>
+						Reset
+					</Button>
+					<div className="flex flex-wrap gap-2 self-end">
+						<Button
+							type="button"
+							size="sm"
+							onClick={playRandomMove}
+							disabled={boardState.status !== "active"}
+						>
+							Random
+						</Button>
+						<Button
+							type="button"
+							variant="secondary"
+							size="sm"
+							onClick={() => playBurst(5)}
+							disabled={boardState.status !== "active"}
+						>
+							+5
+						</Button>
+						<Button
+							type="button"
+							variant="secondary"
+							size="sm"
+							onClick={() => playBurst(20)}
+							disabled={boardState.status !== "active"}
+						>
+							+20
+						</Button>
+					</div>
+				</div>
+			</div>
+			<div className="dev-spectate-board spectator-landing overflow-auto rounded-xl border border-border/60 p-2 sm:p-3">
+				<div className="mx-auto w-fit">
+					<HexBoard
+						state={boardState}
+						effects={effects}
+						unitAnimStates={unitAnimStates}
+						dyingUnitIds={dyingUnitIds}
 					/>
 				</div>
-				<Button
-					type="button"
-					variant="secondary"
-					size="sm"
-					onClick={() => resetBoard(seed)}
-				>
-					Reset
-				</Button>
-				<Button
-					type="button"
-					size="sm"
-					onClick={playRandomMove}
-					disabled={boardState.status !== "active"}
-				>
-					Random Move
-				</Button>
-				<Button
-					type="button"
-					variant="secondary"
-					size="sm"
-					onClick={() => playBurst(5)}
-					disabled={boardState.status !== "active"}
-				>
-					+5 Moves
-				</Button>
-				<Button
-					type="button"
-					variant="secondary"
-					size="sm"
-					onClick={() => playBurst(20)}
-					disabled={boardState.status !== "active"}
-				>
-					+20 Moves
-				</Button>
-			</div>
-			<div className="text-muted-foreground text-xs">
-				Turn: {boardState.turn} | Active: {boardState.activePlayer} | AP:{" "}
-				{boardState.actionsRemaining} | Moves played: {moveCount} | Status:{" "}
-				{boardState.status}
-				{hudFx.passPulse ? " | PASS" : ""}
-			</div>
-			<div className="spectator-landing rounded-md" style={{ minHeight: 200 }}>
-				<HexBoard
-					state={boardState}
-					effects={effects}
-					unitAnimStates={unitAnimStates}
-					dyingUnitIds={dyingUnitIds}
-				/>
 			</div>
 		</section>
 	);

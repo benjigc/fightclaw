@@ -1337,4 +1337,61 @@ describe("v2 engine - War of Attrition", () => {
 		});
 		expect(result.ok).toBe(false);
 	});
+
+	test("listLegalMoves includes upgrade for eligible base units", () => {
+		const state = createInitialState(0, undefined, [...players]);
+		const legalMoves = listLegalMoves(state);
+		expect(
+			legalMoves.some((m) => m.action === "upgrade" && m.unitId === "A-1"),
+		).toBe(true);
+	});
+
+	test("upgrade converts base unit into tier 2 unit and spends resources", () => {
+		const state = createInitialState(0, undefined, [...players]);
+		const beforeGold = state.players.A.gold;
+		const beforeWood = state.players.A.wood;
+		const result = applyMove(state, { action: "upgrade", unitId: "A-1" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		const upgraded = result.state.players.A.units.find((u) => u.id === "A-1");
+		expect(upgraded?.type).toBe("swordsman");
+		expect(result.state.players.A.gold).toBe(
+			beforeGold - DEFAULT_CONFIG.upgradeCosts.infantry.gold,
+		);
+		expect(result.state.players.A.wood).toBe(
+			beforeWood - DEFAULT_CONFIG.upgradeCosts.infantry.wood,
+		);
+		expect(result.state.actionsRemaining).toBe(4);
+		const upgradeEvent = result.engineEvents.find((e) => e.type === "upgrade");
+		expect(upgradeEvent).toBeTruthy();
+	});
+
+	test("cannot upgrade a tier 2 unit again", () => {
+		let state = createInitialState(0, undefined, [...players]);
+		const first = applyMove(state, { action: "upgrade", unitId: "A-1" });
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+		state = first.state;
+		const second = applyMove(state, { action: "upgrade", unitId: "A-1" });
+		expect(second.ok).toBe(false);
+	});
+
+	test("recruit does not allow tier 2 unit types", () => {
+		let state = createInitialState(0, undefined, [...players]);
+		const moveOff = applyMove(state, {
+			action: "move",
+			unitId: "A-1",
+			to: "A1",
+		});
+		expect(moveOff.ok).toBe(true);
+		if (!moveOff.ok) return;
+		state = moveOff.state;
+		const result = applyMove(state, {
+			action: "recruit",
+			unitType: "swordsman" as never,
+			at: "B2",
+		});
+		expect(result.ok).toBe(false);
+	});
 });

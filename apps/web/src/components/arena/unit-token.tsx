@@ -134,9 +134,9 @@ export const UnitToken = memo(function UnitToken({
 				<circle
 					r={radius * 0.5}
 					fill="none"
-					stroke="#ffffff"
+					stroke={color.stroke}
 					strokeWidth={1.2}
-					strokeOpacity={0.6}
+					strokeOpacity={0.95}
 					strokeDasharray="3 2"
 				/>
 			) : null}

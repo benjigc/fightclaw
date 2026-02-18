@@ -42,6 +42,11 @@ function makeBot(
 		apiKey?: string;
 		baseUrl?: string;
 		llmDelayMs?: number;
+		llmParallelCalls?: number;
+		llmTimeoutMs?: number;
+		llmMaxRetries?: number;
+		llmRetryBaseMs?: number;
+		llmMaxTokens?: number;
 		openrouterReferrer?: string;
 		openrouterTitle?: string;
 	},
@@ -68,6 +73,11 @@ function makeBot(
 				openRouterTitle: opts.openrouterTitle,
 				systemPrompt: opts.prompt,
 				delayMs: opts.llmDelayMs ?? 0,
+				parallelCalls: opts.llmParallelCalls,
+				timeoutMs: opts.llmTimeoutMs,
+				maxRetries: opts.llmMaxRetries,
+				retryBaseMs: opts.llmRetryBaseMs,
+				maxTokens: opts.llmMaxTokens,
 			});
 		}
 		case "mockllm":
@@ -100,6 +110,9 @@ async function main() {
 
 	const turnLimit = num(argv.turnLimit, 40);
 	const actionsPerTurn = num(argv.actionsPerTurn, 7);
+	const boardColumnsRaw = num(argv.boardColumns, 17);
+	const boardColumns =
+		boardColumnsRaw === 17 || boardColumnsRaw === 21 ? boardColumnsRaw : 17;
 	const minRecommendedMaxTurns = Math.max(200, turnLimit * actionsPerTurn * 2);
 	const maxTurns =
 		argv.maxTurns === undefined
@@ -109,6 +122,7 @@ async function main() {
 	const engineConfig: EngineConfigInput = {
 		turnLimit,
 		actionsPerTurn,
+		boardColumns: boardColumns as 17 | 21,
 	};
 
 	const bot1Type = (
@@ -137,6 +151,11 @@ async function main() {
 			? argv.apiKey2
 			: (apiKey ?? inferApiKeyForBaseUrl(baseUrl2));
 	const llmDelayMs = num(argv.llmDelay, 0);
+	const llmParallelCalls = Math.max(1, num(argv.llmParallelCalls, 1));
+	const llmTimeoutMs = num(argv.llmTimeoutMs, 35000);
+	const llmMaxRetries = Math.max(0, num(argv.llmMaxRetries, 3));
+	const llmRetryBaseMs = Math.max(1, num(argv.llmRetryBaseMs, 1000));
+	const llmMaxTokens = Math.max(64, num(argv.llmMaxTokens, 320));
 	const openrouterReferrer =
 		typeof argv.openrouterReferrer === "string"
 			? argv.openrouterReferrer
@@ -168,6 +187,11 @@ async function main() {
 		apiKey: apiKey1,
 		baseUrl: baseUrl1,
 		llmDelayMs,
+		llmParallelCalls,
+		llmTimeoutMs,
+		llmMaxRetries,
+		llmRetryBaseMs,
+		llmMaxTokens,
 		openrouterReferrer,
 		openrouterTitle,
 	});
@@ -178,6 +202,11 @@ async function main() {
 		apiKey: apiKey2,
 		baseUrl: baseUrl2,
 		llmDelayMs,
+		llmParallelCalls,
+		llmTimeoutMs,
+		llmMaxRetries,
+		llmRetryBaseMs,
+		llmMaxTokens,
 		openrouterReferrer,
 		openrouterTitle,
 	});
@@ -485,6 +514,7 @@ async function main() {
 	console.error("Engine options:");
 	console.error("  --turnLimit N       Engine turn limit (default: 40)");
 	console.error("  --actionsPerTurn N  Actions per turn (default: 7)");
+	console.error("  --boardColumns N    Board width: 17 or 21 (default: 17)");
 	console.error(
 		"  --scenario NAME     Combat scenario: melee, ranged, stronghold_rush, midfield, all_infantry, all_cavalry, all_archer, infantry_archer, cavalry_archer, infantry_cavalry",
 	);
@@ -560,6 +590,21 @@ async function main() {
 	);
 	console.error(
 		"  --llmDelay MS   Delay between LLM calls per bot (default: 0)",
+	);
+	console.error(
+		"  --llmParallelCalls N  Parallel API requests per LLM turn (default: 1)",
+	);
+	console.error(
+		"  --llmTimeoutMs MS     Per-call API timeout in ms (default: 35000)",
+	);
+	console.error(
+		"  --llmMaxRetries N     Max retry attempts per call (default: 3)",
+	);
+	console.error(
+		"  --llmRetryBaseMs MS   Retry backoff base delay in ms (default: 1000)",
+	);
+	console.error(
+		"  --llmMaxTokens N      Max output tokens per model call (default: 320)",
 	);
 	process.exit(1);
 }

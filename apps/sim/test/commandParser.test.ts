@@ -31,6 +31,12 @@ describe("parseCommands", () => {
 		expect(cmds).toEqual([{ action: "fortify", unitId: "A-1" }]);
 	});
 
+	test("handles upgrade command", () => {
+		const input = "upgrade A-1";
+		const cmds = parseCommands(input);
+		expect(cmds).toEqual([{ action: "upgrade", unitId: "A-1" }]);
+	});
+
 	test("skips blank lines and comments", () => {
 		const input = "move A-1 E10\n\n# comment\nend_turn";
 		const cmds = parseCommands(input);
@@ -138,6 +144,16 @@ describe("matchCommand", () => {
 		const cmd = { action: "fortify" as const, unitId: "A-1" };
 		const match = matchCommand(cmd, legalMoves);
 		expect(match).toEqual({ action: "fortify", unitId: "A-1" });
+	});
+
+	test("matches upgrade command", () => {
+		const legalMoves: Move[] = [
+			{ action: "upgrade", unitId: "A-1" },
+			{ action: "end_turn" },
+		];
+		const cmd = { action: "upgrade" as const, unitId: "A-1" };
+		const match = matchCommand(cmd, legalMoves);
+		expect(match).toEqual({ action: "upgrade", unitId: "A-1" });
 	});
 
 	test("returns null for unmatched command", () => {

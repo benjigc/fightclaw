@@ -25,7 +25,12 @@ export function createFightclawGame(config: HarnessConfig) {
 		setup: () => {
 			const { playerMap, reversePlayerMap } = createPlayerMap(config.players);
 			const matchState = config.scenario
-				? createCombatScenario(config.seed, config.players, config.scenario)
+				? createCombatScenario(
+						config.seed,
+						config.players,
+						config.scenario,
+						config.engineConfig,
+					)
 				: Engine.createInitialState(
 						config.seed,
 						config.players,

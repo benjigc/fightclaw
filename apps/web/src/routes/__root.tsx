@@ -40,7 +40,7 @@ function RootComponent() {
 			<div className="dark h-svh overflow-hidden bg-[#050b10]">
 				<Outlet />
 			</div>
-			<Toaster richColors />
+			<Toaster richColors theme="dark" />
 			<TanStackRouterDevtools position="bottom-left" />
 		</>
 	);

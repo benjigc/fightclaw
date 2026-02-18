@@ -15,6 +15,9 @@ const TYPE_ABBREV: Record<string, string> = {
 	infantry: "inf",
 	cavalry: "cav",
 	archer: "arc",
+	swordsman: "swd",
+	knight: "kni",
+	crossbow: "xbw",
 };
 
 // Terrain types to skip when listing terrain near units
@@ -46,6 +49,8 @@ export function encodeMove(move: Move): string {
 			return `recruit ${move.unitType} ${move.at}`;
 		case "fortify":
 			return `fortify ${move.unitId}`;
+		case "upgrade":
+			return `upgrade ${move.unitId}`;
 		case "end_turn":
 			return "end_turn";
 		case "pass":
@@ -204,6 +209,9 @@ export function encodeLegalMoves(moves: Move[], state: MatchState): string {
 				break;
 			case "fortify":
 				other.push(`  fortify ${move.unitId}`);
+				break;
+			case "upgrade":
+				other.push(`  upgrade ${move.unitId}`);
 				break;
 		}
 	}

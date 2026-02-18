@@ -161,6 +161,7 @@ type Move =
 	| { action: "attack"; unitId: string; target: HexId; reasoning?: string }
 	| { action: "recruit"; unitType: "infantry" | "cavalry" | "archer"; at: HexId; reasoning?: string }
 	| { action: "fortify"; unitId: string; reasoning?: string }
+	| { action: "upgrade"; unitId: string; reasoning?: string } // infantry->swordsman, cavalry->knight, archer->crossbow
 	| { action: "end_turn"; reasoning?: string }
 	| { action: "pass"; reasoning?: string }; // legacy alias for end_turn
 ```
@@ -207,9 +208,10 @@ Response JSON (forfeit on invalid move):
 Notes:
 - `moveId` must be unique per match.
 - `expectedVersion` must equal the current `stateVersion` or the request is rejected with `409` and a `stateVersion` hint.
-- `move.action` enum (v2): `move`, `attack`, `recruit`, `fortify`, `end_turn`, `pass`.
+- `move.action` enum (v2): `move`, `attack`, `recruit`, `fortify`, `upgrade`, `end_turn`, `pass`.
   - `pass` is a legacy alias for `end_turn` (migration-only).
-- `move.unitType` enum: `infantry`, `cavalry`, `archer` (for recruit).
+- `move.unitType` enum for `recruit`: `infantry`, `cavalry`, `archer`.
+- Unit upgrade ladder: `infantry -> swordsman`, `cavalry -> knight`, `archer -> crossbow`.
 - `reasonCode` is an alias of `reason` and is always the same string when present.
 
 Internal-only endpoint:
@@ -235,7 +237,13 @@ type HexType =
 	| "deploy_a"
 	| "deploy_b";
 
-type UnitType = "infantry" | "cavalry" | "archer";
+type UnitType =
+	| "infantry"
+	| "cavalry"
+	| "archer"
+	| "swordsman"
+	| "knight"
+	| "crossbow";
 
 type Unit = {
 	id: string; // "A-1", "B-4", ...
@@ -243,7 +251,7 @@ type Unit = {
 	owner: PlayerSide;
 	position: HexId;
 	hp: number;
-	maxHp: number; // infantry 3, cavalry 2, archer 2
+	maxHp: number; // infantry 3, cavalry 2, archer 2, swordsman 4, knight 5, crossbow 3
 	isFortified: boolean;
 	// Per-player-turn bookkeeping for deterministic validation.
 	movedThisTurn: boolean;
@@ -316,6 +324,7 @@ type EngineEvent =
 	  }
 	| { type: "recruit"; turn: number; player: PlayerSide; unitId: string; unitType: UnitType; at: HexId }
 	| { type: "fortify"; turn: number; player: PlayerSide; unitId: string; at: HexId }
+	| { type: "upgrade"; turn: number; player: PlayerSide; unitId: string; fromType: "infantry" | "cavalry" | "archer"; toType: "swordsman" | "knight" | "crossbow"; at: HexId }
 	| { type: "reject"; turn: number; player: PlayerSide; reason: string }
 	| { type: "control_update"; turn: number; changes: { hexId: HexId; from: PlayerSide | null; to: PlayerSide | null }[] }
 	| { type: "game_end"; turn: number; reason: string; winner: PlayerSide | null; vpA: number; vpB: number };

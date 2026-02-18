@@ -93,7 +93,12 @@ async function playMatchLegacy(opts: {
 	}
 
 	let state: MatchState = opts.scenario
-		? createCombatScenario(opts.seed, playerIds, opts.scenario)
+		? createCombatScenario(
+				opts.seed,
+				playerIds,
+				opts.scenario,
+				opts.engineConfig,
+			)
 		: Engine.createInitialState(opts.seed, playerIds, opts.engineConfig);
 	let illegalMoves = 0;
 	const moves: Move[] = [];

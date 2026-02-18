@@ -10,7 +10,6 @@ The LLM bot implementation is **functionally working** but has **fundamental gam
 
 ### 1. API Integration (GOOD)
 - **OpenRouter**: Successfully connects and responds
-- **MiniMax**: Compatible via OpenAI SDK
 - **Parsing**: Handles markdown code blocks and alternative field names
 - **Timeout**: 10-second timeout prevents indefinite hangs
 - **Fallback**: Gracefully degrades to random legal moves on API failure
@@ -162,7 +161,6 @@ Files generated per run:
 ## ✅ Verification Checklist
 
 - [x] OpenRouter API integration works
-- [x] MiniMax API integration works (via OpenAI SDK)
 - [x] Response parsing handles markdown/code blocks
 - [x] Timeout prevents indefinite hangs
 - [x] Fallback to random moves on failure

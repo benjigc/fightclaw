@@ -120,6 +120,11 @@ export interface TurnMetricsV2 {
 		ownVpDelta: number;
 		enemyVpDelta: number;
 	};
+	upgrade: {
+		upgradesAccepted: number;
+		estimatedGoldSpend: number;
+		estimatedWoodSpend: number;
+	};
 }
 
 export interface MatchArtifact {

@@ -15,6 +15,11 @@ import {
 	useArenaAnimator,
 } from "@/lib/arena-animator";
 
+const NAV_LINKS = [
+	{ to: "/leaderboard" as const, label: "Leaderboard" },
+	...(import.meta.env.DEV ? [{ to: "/dev" as const, label: "Dev" }] : []),
+];
+
 export const Route = createFileRoute("/")({
 	component: SpectatorLanding,
 	validateSearch: (search: Record<string, unknown>) => ({
@@ -148,10 +153,6 @@ function SpectatorLanding() {
 			setConnectionStatus("live");
 		};
 
-		const handleGameEnded = (_event: MessageEvent<string>) => {
-			/* game_ended handled via state transitions */
-		};
-
 		const handleEngineEvents = (event: MessageEvent<string>) => {
 			let payload: EngineEventsEnvelopeV1 | null = null;
 			try {
@@ -175,10 +176,6 @@ function SpectatorLanding() {
 		eventSource.addEventListener(
 			"engine_events",
 			handleEngineEvents as EventListener,
-		);
-		eventSource.addEventListener(
-			"game_ended",
-			handleGameEnded as EventListener,
 		);
 		eventSource.addEventListener("error", () => {
 			if (!active) return;
@@ -393,14 +390,6 @@ function SpectatorLanding() {
 		}
 	}, [connectionStatus]);
 
-	const navLinks = useMemo(
-		() => [
-			{ to: "/leaderboard" as const, label: "Leaderboard" },
-			...(import.meta.env.DEV ? [{ to: "/dev" as const, label: "Dev" }] : []),
-		],
-		[],
-	);
-
 	return (
 		<div className="spectator-landing">
 			{/* Game-aware top bar */}
@@ -427,7 +416,7 @@ function SpectatorLanding() {
 					)}
 				</span>
 				<nav className="flex gap-4">
-					{navLinks.map(({ to, label }) => (
+					{NAV_LINKS.map(({ to, label }) => (
 						<Link key={to} to={to}>
 							{label}
 						</Link>

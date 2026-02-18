@@ -36,6 +36,9 @@ export const UNIT_ASCII: Record<UnitType, string[]> = {
 	infantry: ["[o]", "/|\\", "/ \\"],
 	cavalry: [" o/", "/=\\\\", '" "'],
 	archer: [" o", "(|>-->", "/ \\"],
+	swordsman: ["[o]", "/|>", "/ \\"],
+	knight: [" o/", "/#\\\\", '" "'],
+	crossbow: [" o", "(|}-=>", "/ \\"],
 };
 
 export const EFFECT_COLORS = {

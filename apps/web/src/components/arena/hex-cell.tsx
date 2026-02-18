@@ -1,6 +1,6 @@
 import type { HexType, PlayerSide } from "@fightclaw/engine";
 import { memo } from "react";
-import { TERRAIN_FILLS, TERRAIN_ICONS } from "@/lib/arena-theme";
+import { PLAYER_COLORS, TERRAIN_FILLS, TERRAIN_ICONS } from "@/lib/arena-theme";
 import { hexPoints } from "@/lib/hex-geo";
 
 export type HexCellProps = {
@@ -22,13 +22,16 @@ export const HexCell = memo(function HexCell({
 	const points = hexPoints(cx, cy, radius);
 	const fill = TERRAIN_FILLS[terrain];
 	const icon = TERRAIN_ICONS[terrain];
+	const ownerColor =
+		controlledBy !== null ? PLAYER_COLORS[controlledBy] : undefined;
 
 	return (
 		<g>
 			<polygon
 				points={points}
-				fill={fill}
-				stroke="#ffffff"
+				fill={ownerColor ? ownerColor.glow : fill}
+				fillOpacity={ownerColor ? 0.2 : 1}
+				stroke={ownerColor?.stroke ?? "#ffffff"}
 				strokeWidth={controlledBy ? 1.6 : 0.6}
 				strokeOpacity={controlledBy ? 0.9 : 0.5}
 				strokeDasharray={controlledBy ? undefined : "4 3"}

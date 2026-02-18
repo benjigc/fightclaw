@@ -17,6 +17,7 @@ import { encodeLegalMoves, encodeState } from "./stateEncoder";
 const DEFAULT_LLM_TIMEOUT_MS = 35_000;
 const DEFAULT_LLM_MAX_RETRIES = 3;
 const DEFAULT_LLM_RETRY_BASE_MS = 1_000;
+const DEFAULT_LLM_MAX_TOKENS = 320;
 
 export interface LlmBotConfig {
 	// e.g. "anthropic/claude-3.5-haiku", "openai/gpt-4o-mini"
@@ -32,6 +33,15 @@ export interface LlmBotConfig {
 	systemPrompt?: string;
 	// Default 0.3
 	temperature?: number;
+	// Number of concurrent requests per turn (first success wins).
+	parallelCalls?: number;
+	// Per-call timeout in ms.
+	timeoutMs?: number;
+	// Retry configuration.
+	maxRetries?: number;
+	retryBaseMs?: number;
+	// Token budget for response.
+	maxTokens?: number;
 }
 
 export function makeLlmBot(
@@ -147,41 +157,39 @@ async function chooseTurnDetailed(
 	let content = "";
 
 	try {
-		const completion = await withRetry(
-			async () => {
-				const timeoutMs = parseEnvInt(
-					process.env.SIM_LLM_TIMEOUT_MS,
-					DEFAULT_LLM_TIMEOUT_MS,
-				);
-				return Promise.race([
-					client.chat.completions.create({
-						model: config.model,
-						temperature: config.temperature ?? 0.3,
-						messages: [
-							{ role: "system", content: system },
-							{ role: "user", content: user },
-						],
-						max_tokens: 400,
-					}),
-					new Promise<never>((_, reject) =>
-						setTimeout(
-							() => reject(new Error(`API timeout after ${timeoutMs}ms`)),
-							timeoutMs,
-						),
-					),
-				]);
-			},
-			{
-				maxRetries: parseEnvInt(
-					process.env.SIM_LLM_MAX_RETRIES,
-					DEFAULT_LLM_MAX_RETRIES,
-				),
-				baseDelayMs: parseEnvInt(
+		const timeoutMs = Math.max(
+			1,
+			config.timeoutMs ??
+				parseEnvInt(process.env.SIM_LLM_TIMEOUT_MS, DEFAULT_LLM_TIMEOUT_MS),
+		);
+		const retryConfig = {
+			maxRetries:
+				config.maxRetries ??
+				parseEnvInt(process.env.SIM_LLM_MAX_RETRIES, DEFAULT_LLM_MAX_RETRIES),
+			baseDelayMs:
+				config.retryBaseMs ??
+				parseEnvInt(
 					process.env.SIM_LLM_RETRY_BASE_MS,
 					DEFAULT_LLM_RETRY_BASE_MS,
 				),
-			},
+		};
+		const parallelCalls = Math.max(
+			1,
+			config.parallelCalls ??
+				parseEnvInt(process.env.SIM_LLM_PARALLEL_CALLS, 1),
 		);
+
+		const requestOnce = () =>
+			requestWithTimeout(client, config, system, user, timeoutMs);
+
+		const completion =
+			parallelCalls === 1
+				? await withRetry(requestOnce, retryConfig)
+				: await Promise.any(
+						Array.from({ length: parallelCalls }, () =>
+							withRetry(requestOnce, retryConfig),
+						),
+					);
 		content = completion.choices?.[0]?.message?.content ?? "";
 	} catch (e) {
 		apiError = e instanceof Error ? e.message : String(e);
@@ -200,7 +208,7 @@ async function chooseTurnDetailed(
 			responsePreview: "",
 			apiError,
 		});
-		const fallback = pickFallbackMove(legalMoves, rng);
+		const fallback = pickFallbackMove(legalMoves, ctx.rng);
 		return {
 			moves: [fallback],
 			prompt: fullPrompt,
@@ -276,6 +284,42 @@ async function chooseTurnDetailed(
 	};
 }
 
+function requestWithTimeout(
+	client: OpenAI,
+	config: LlmBotConfig,
+	system: string,
+	user: string,
+	timeoutMs: number,
+) {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => {
+		controller.abort();
+	}, timeoutMs);
+
+	return client.chat.completions
+		.create(
+			{
+				model: config.model,
+				temperature: config.temperature ?? 0.3,
+				messages: [
+					{ role: "system", content: system },
+					{ role: "user", content: user },
+				],
+				max_tokens: config.maxTokens ?? DEFAULT_LLM_MAX_TOKENS,
+			},
+			{ signal: controller.signal },
+		)
+		.catch((error) => {
+			if (controller.signal.aborted) {
+				throw new Error(`API timeout after ${timeoutMs}ms`);
+			}
+			throw error;
+		})
+		.finally(() => {
+			clearTimeout(timeout);
+		});
+}
+
 // ---------------------------------------------------------------------------
 // System prompt builders
 // ---------------------------------------------------------------------------
@@ -301,10 +345,11 @@ function buildFullSystemPrompt(
 		"  attack <unitId> <hexId>     - Attack target hex",
 		"  recruit <unitType> <hexId>  - Recruit at your stronghold (infantry/cavalry/archer)",
 		"  fortify <unitId>            - Fortify unit in place",
+		"  upgrade <unitId>            - Upgrade a base unit (infantry->swordsman, cavalry->knight, archer->crossbow)",
 		"  end_turn                    - End your turn",
 		"IMPORTANT: commands execute in order and legality changes after each command.",
 		"",
-		"UNITS: infantry (ATK=2 DEF=4 HP=3 range=1 move=2), cavalry (ATK=4 DEF=2 HP=2 range=1 move=4), archer (ATK=3 DEF=1 HP=2 range=2 move=3)",
+		"UNITS T1: infantry, cavalry, archer. T2 upgrades: infantry->swordsman, cavalry->knight, archer->crossbow.",
 		"COMBAT: damage = max(1, ATK+1+stackBonus - DEF). Cavalry charge: +2 ATK if moved 2+ hexes.",
 		"WIN: capture ANY enemy stronghold, eliminate all enemies, or highest VP at turn limit.",
 		`Your stronghold: ${ownStrongholdHex}. Enemy stronghold: ${enemyStrongholdHex}.`,

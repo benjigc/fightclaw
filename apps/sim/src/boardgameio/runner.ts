@@ -243,6 +243,60 @@ export async function playMatchBoardgameIO(
 				commandIndex++;
 			}
 
+			// Ensure each harness "turn" closes the active player's engine turn.
+			// This avoids counting partial turns (single move plans with AP remaining)
+			// as full turns, which can artificially inflate maxTurns endings.
+			if (!forfeitTriggered) {
+				const current = requireState(client.getState());
+				const midTerminal = Engine.isTerminal(current.G.matchState);
+				const stillActive =
+					!midTerminal.ended &&
+					Engine.currentPlayer(current.G.matchState) === activeAgent &&
+					current.G.matchState.actionsRemaining > 0;
+
+				if (stillActive) {
+					const forcedEndTurn: Move = { action: "end_turn" };
+					const checked = applyEngineMoveChecked({
+						state: current.G.matchState,
+						move: forcedEndTurn,
+						validationMode: opts.moveValidationMode,
+					});
+
+					if (checked.accepted) {
+						client.updatePlayerID(actingPlayerID);
+						client.moves.applyMove({
+							move: forcedEndTurn,
+							turnIndex,
+							commandIndex,
+						});
+						artifact.recordCommandAttempt(turnRecordIdx, {
+							commandIndex,
+							move: forcedEndTurn,
+							accepted: true,
+						});
+						acceptedMoves.push(forcedEndTurn);
+						turnComplete = true;
+					} else {
+						illegalMoves++;
+						artifact.recordCommandAttempt(turnRecordIdx, {
+							commandIndex,
+							move: forcedEndTurn,
+							accepted: false,
+							rejectionReason: checked.rejectionReason,
+						});
+						if (opts.invalidPolicy === "forfeit") {
+							forfeitTriggered = true;
+							forfeitWinner = String(
+								playerIds.find((id) => id !== activeAgent) ?? "",
+							);
+						}
+						if (opts.invalidPolicy === "stop_turn") {
+							turnComplete = true;
+						}
+					}
+				}
+			}
+
 			if (forfeitTriggered) {
 				break;
 			}
@@ -407,6 +461,7 @@ function buildTurnMetricsV2(
 
 	const startAvgDist = avgDistanceToEnemyStronghold(before, side);
 	const endAvgDist = avgDistanceToEnemyStronghold(after, side);
+	const upgradeSpend = estimateUpgradeSpend(before, side, accepted);
 
 	return {
 		side,
@@ -442,6 +497,47 @@ function buildTurnMetricsV2(
 			ownVpDelta: afterOwn.vp - beforeOwn.vp,
 			enemyVpDelta: afterEnemy.vp - beforeEnemy.vp,
 		},
+		upgrade: {
+			upgradesAccepted: upgradeSpend.upgradesAccepted,
+			estimatedGoldSpend: upgradeSpend.estimatedGoldSpend,
+			estimatedWoodSpend: upgradeSpend.estimatedWoodSpend,
+		},
+	};
+}
+
+function estimateUpgradeSpend(
+	before: Parameters<Bot["chooseMove"]>[0]["state"],
+	side: "A" | "B",
+	accepted: Array<{ accepted: boolean; move: Move }>,
+): {
+	upgradesAccepted: number;
+	estimatedGoldSpend: number;
+	estimatedWoodSpend: number;
+} {
+	const unitById = new Map(before.players[side].units.map((u) => [u.id, u]));
+	let upgradesAccepted = 0;
+	let estimatedGoldSpend = 0;
+	let estimatedWoodSpend = 0;
+	for (const a of accepted) {
+		if (a.move.action !== "upgrade") continue;
+		const unit = unitById.get(a.move.unitId);
+		if (!unit) continue;
+		upgradesAccepted++;
+		if (unit.type === "infantry") {
+			estimatedGoldSpend += 9;
+			estimatedWoodSpend += 3;
+		} else if (unit.type === "cavalry") {
+			estimatedGoldSpend += 15;
+			estimatedWoodSpend += 5;
+		} else if (unit.type === "archer") {
+			estimatedGoldSpend += 12;
+			estimatedWoodSpend += 4;
+		}
+	}
+	return {
+		upgradesAccepted,
+		estimatedGoldSpend,
+		estimatedWoodSpend,
 	};
 }
 
