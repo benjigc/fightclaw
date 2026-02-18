@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import type { Anomaly, WinRateStats } from "../simulation/config";
-import { escapeHtml, formatTurnWithPrefix } from "./htmlUtils";
+import { escapeHtml, formatTurnWithPrefix } from "./htmlUtils.js";
 
 export interface DashboardData {
 	summary: {
