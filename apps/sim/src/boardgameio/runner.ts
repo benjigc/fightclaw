@@ -8,7 +8,11 @@ import {
 import { Engine } from "../engineAdapter";
 import { mulberry32 } from "../rng";
 import type { Bot, MatchLog, MatchResult, Move } from "../types";
-import { applyEngineMoveChecked, mapActiveSideToPlayerID } from "./adapter";
+import {
+	applyEngineMoveChecked,
+	bindHarnessMatchState,
+	mapActiveSideToPlayerID,
+} from "./adapter";
 import { ArtifactBuilder, sha256, stableStringify } from "./artifact";
 import { createFightclawGame } from "./createGame";
 import type {
@@ -421,7 +425,7 @@ function requireState(
 	if (!state) {
 		throw new Error("boardgame client state is null");
 	}
-	Engine.bindEngineConfig(state.G.matchState, state.G.engineConfig);
+	bindHarnessMatchState(state.G);
 	return state;
 }
 

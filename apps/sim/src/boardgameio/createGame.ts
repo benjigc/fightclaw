@@ -4,6 +4,7 @@ import type { Move } from "../types";
 import {
 	applyEngineMoveChecked,
 	assertActivePlayerMapped,
+	bindHarnessMatchState,
 	createPlayerMap,
 	mapActiveSideToPlayerID,
 } from "./adapter";
@@ -74,12 +75,12 @@ export function createFightclawGame(config: HarnessConfig) {
 			},
 			onBegin: ({ G }: { G: BoardgameHarnessState }) => ({
 				...G,
-				matchState: Engine.bindEngineConfig(G.matchState, G.engineConfig),
+				matchState: bindHarnessMatchState(G),
 				turnIndex: G.turnIndex + 1,
 			}),
 		},
 		endIf: ({ G }: { G: BoardgameHarnessState }) => {
-			const matchState = Engine.bindEngineConfig(G.matchState, G.engineConfig);
+			const matchState = bindHarnessMatchState(G);
 			const terminal = Engine.isTerminal(matchState);
 			if (!terminal.ended) return undefined;
 			return {
@@ -92,10 +93,7 @@ export function createFightclawGame(config: HarnessConfig) {
 				{ G }: { G: BoardgameHarnessState },
 				payload: MoveApplyPayload,
 			) => {
-				const boundState = Engine.bindEngineConfig(
-					G.matchState,
-					G.engineConfig,
-				);
+				const boundState = bindHarnessMatchState(G);
 				const result = applyEngineMoveChecked({
 					state: boundState,
 					move: payload.move,
