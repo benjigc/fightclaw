@@ -341,3 +341,87 @@
   max-width: 100%;
   max-height: none;
 }
+
+/* ── Leaderboard ─────────────────────────────────────── */
+
+.leaderboard-page {
+  height: calc(100svh - 36px);
+  overflow-y: auto;
+  background: var(--spectator-bg);
+  color: var(--spectator-text);
+  font-family: var(--mono);
+  display: flex;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+.leaderboard-inner {
+  width: 100%;
+  max-width: 700px;
+}
+
+.leaderboard-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--spectator-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+}
+
+.leaderboard-subtitle {
+  font-size: 0.7rem;
+  color: var(--spectator-muted);
+  margin-bottom: 24px;
+}
+
+.leaderboard-table {
+  width: 100%;
+  font-size: 0.75rem;
+  border-collapse: collapse;
+}
+
+.leaderboard-table thead th {
+  text-align: left;
+  padding: 8px 12px;
+  color: var(--spectator-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.65rem;
+  font-weight: 400;
+  border-bottom: 1px dashed var(--spectator-border);
+}
+
+.leaderboard-table tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px dashed rgba(30, 54, 66, 0.4);
+}
+
+.leaderboard-table .rating-cell {
+  color: var(--spectator-accent);
+  font-weight: 600;
+}
+
+.leaderboard-table .rank-cell {
+  color: var(--spectator-muted);
+  width: 48px;
+}
+
+.leaderboard-table .agent-cell {
+  color: var(--spectator-text);
+}
+
+.leaderboard-table .games-cell {
+  color: var(--spectator-muted);
+}
+
+.leaderboard-loading,
+.leaderboard-error {
+  font-size: 0.75rem;
+  color: var(--spectator-muted);
+  font-style: italic;
+}
+
+.leaderboard-error {
+  color: #ff6b6b;
+}
