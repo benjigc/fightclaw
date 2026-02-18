@@ -4,8 +4,8 @@ import {
 	ELEVATION_STYLE,
 	PLAYER_COLORS,
 	TERRAIN_ACCENT,
+	TERRAIN_ASCII,
 	TERRAIN_ELEVATION,
-	TERRAIN_ICONS,
 } from "@/lib/arena-theme";
 import { hexPoints, STACK_OFFSET_Y } from "@/lib/hex-geo";
 
@@ -16,6 +16,7 @@ export type HexCellProps = {
 	radius: number;
 	terrain: HexType;
 	controlledBy: PlayerSide | null;
+	hasUnit: boolean;
 };
 
 export const HexCell = memo(function HexCell({
@@ -24,10 +25,11 @@ export const HexCell = memo(function HexCell({
 	radius,
 	terrain,
 	controlledBy,
+	hasUnit,
 }: HexCellProps) {
 	const tier = TERRAIN_ELEVATION[terrain];
 	const style = ELEVATION_STYLE[tier];
-	const icon = TERRAIN_ICONS[terrain];
+	const terrainAscii = TERRAIN_ASCII[terrain];
 	const accent = TERRAIN_ACCENT[terrain];
 	const ownerColor =
 		controlledBy !== null ? PLAYER_COLORS[controlledBy] : undefined;
@@ -52,6 +54,10 @@ export const HexCell = memo(function HexCell({
 
 	// Top face points
 	const topPoints = hexPoints(cx, cy, radius);
+
+	// Terrain ASCII art color: use the elevation tier's stroke color
+	const terrainColor = style.stroke;
+	const fontSize = radius * 0.3;
 
 	return (
 		<g>
@@ -112,20 +118,29 @@ export const HexCell = memo(function HexCell({
 				/>
 			)}
 
-			{/* Terrain icon */}
-			{icon ? (
-				<text
-					x={cx}
-					y={cy + 1}
-					textAnchor="middle"
-					dominantBaseline="central"
-					fontSize={radius * 0.45}
-					fill="#ffffff"
-					fillOpacity={0.5}
-					style={{ pointerEvents: "none" }}
-				>
-					{icon}
-				</text>
+			{/* Terrain ASCII art */}
+			{terrainAscii ? (
+				<g style={{ pointerEvents: "none" }}>
+					{terrainAscii.map((line, i) => {
+						const lineHeight = fontSize * 1.2;
+						const startY = -((terrainAscii.length - 1) * lineHeight) / 2;
+						return (
+							<text
+								key={line}
+								x={cx}
+								y={cy + startY + i * lineHeight}
+								textAnchor="middle"
+								dominantBaseline="central"
+								fontFamily="monospace"
+								fontSize={fontSize}
+								fill={terrainColor}
+								fillOpacity={hasUnit ? 0.15 : 0.5}
+							>
+								{line}
+							</text>
+						);
+					})}
+				</g>
 			) : null}
 		</g>
 	);

@@ -100,6 +100,7 @@ export const HexBoard = memo(function HexBoard({
 							radius={R}
 							terrain={hex.type}
 							controlledBy={hex.controlledBy}
+							hasUnit={hex.unitIds.length > 0}
 						/>
 					);
 				})}

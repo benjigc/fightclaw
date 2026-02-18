@@ -63,17 +63,17 @@ export const TERRAIN_ACCENT: Partial<Record<HexType, string>> = {
 	stronghold_b: "#1a2820",
 };
 
-export const TERRAIN_ICONS: Partial<Record<HexType, string>> = {
-	forest: "\u2663", // ♣
-	hills: "\u2206", // ∆
-	high_ground: "\u25b2", // ▲
-	gold_mine: "\u2726", // ✦
-	lumber_camp: "\u2692", // ⚒
-	crown: "\u2655", // ♕
-	stronghold_a: "\u2588", // █
-	stronghold_b: "\u2588", // █
-	deploy_a: "\u25cb", // ○
-	deploy_b: "\u25cb", // ○
+export const TERRAIN_ASCII: Partial<Record<HexType, string[]>> = {
+	forest: ["/\\|/\\", "||||||", "\\|/|\\"],
+	gold_mine: [" $$ ", "/\\/\\", " \\/ "],
+	lumber_camp: [" ## ", " || ", "_||_"],
+	crown: ["_/\\_", "|  |", "\\__/"],
+	stronghold_a: ["[==]", "|##|", "|__|"],
+	stronghold_b: ["[==]", "|##|", "|__|"],
+	deploy_a: [" ._ ", ". A.", " '. "],
+	deploy_b: [" ._ ", ". B.", " '. "],
+	hills: [" /\\ ", "/  \\", "----"],
+	high_ground: ["/\\/\\", "|  |", "----"],
 };
 
 export const UNIT_ASCII: Record<UnitType, string[]> = {
