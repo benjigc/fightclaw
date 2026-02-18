@@ -37,6 +37,9 @@ describe("integration", () => {
 			id,
 			name: "BatchAttackBot",
 			chooseMove: ({ legalMoves, rng }) => {
+				if (legalMoves.length === 0) {
+					return { action: "end_turn" };
+				}
 				return legalMoves[Math.floor(rng() * legalMoves.length)] as Move;
 			},
 			chooseTurn: async ({ legalMoves }) => {

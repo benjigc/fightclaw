@@ -1,3 +1,4 @@
+import type { BaseUnitType, PlayerSide, Unit } from "@fightclaw/engine";
 import type { ScenarioName } from "../boardgameio/types";
 import { Engine } from "../engineAdapter";
 import type { AgentId, EngineConfigInput, MatchState } from "../types";
@@ -6,8 +7,8 @@ const BOARD_17_CANONICAL_COL_MAP = [
 	0, 1, 2, 3, 4, 5, 6, 7, 10, 13, 14, 15, 16, 17, 18, 19, 20,
 ] as const;
 
-type UnitType = "infantry" | "cavalry" | "archer";
-type UnitOwner = "A" | "B";
+type UnitType = BaseUnitType;
+type UnitOwner = PlayerSide;
 type UnitPlacement = readonly [
 	unitId: string,
 	unitType: UnitType,
@@ -294,19 +295,4 @@ function parseHexCoordinate(
 	const col = Number.parseInt(match[2] ?? "", 10);
 	if (!Number.isFinite(col) || col < 1) return undefined;
 	return { row, col };
-}
-
-// Type augmentation
-interface Unit {
-	id: string;
-	type: UnitType;
-	owner: UnitOwner;
-	position: string;
-	hp: number;
-	maxHp: number;
-	isFortified: boolean;
-	movedThisTurn: boolean;
-	movedDistance: number;
-	attackedThisTurn: boolean;
-	canActThisTurn: boolean;
 }

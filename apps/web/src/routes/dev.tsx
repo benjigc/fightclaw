@@ -183,6 +183,7 @@ function DevLayout() {
 	const [logExpanded, setLogExpanded] = useState(false);
 	const [replayError, setReplayError] = useState<string | null>(null);
 	const playIntervalRef = useRef<number | null>(null);
+	const replayStateRef = useRef<MatchState | null>(null);
 
 	const selectedMatch = bundle?.matches[selectedMatchIdx] ?? null;
 
@@ -203,7 +204,10 @@ function DevLayout() {
 				setActionLog([]);
 				resetAnimator();
 				const first = data.matches[0];
-				if (first) setBoardState(first.initialState);
+				if (first) {
+					replayStateRef.current = first.initialState;
+					setBoardState(first.initialState);
+				}
 			} catch (err) {
 				setReplayError((err as Error).message);
 			}
@@ -221,6 +225,7 @@ function DevLayout() {
 			setReplayPlaying(false);
 			setActionLog([]);
 			resetAnimator();
+			replayStateRef.current = match.initialState;
 			setBoardState(match.initialState);
 		},
 		[bundle, resetAnimator],
@@ -232,6 +237,7 @@ function DevLayout() {
 		setReplayPlaying(false);
 		setActionLog([]);
 		resetAnimator();
+		replayStateRef.current = selectedMatch.initialState;
 		setBoardState(selectedMatch.initialState);
 	}, [selectedMatch, resetAnimator]);
 
@@ -241,13 +247,15 @@ function DevLayout() {
 
 		const step = selectedMatch.steps[replayPly];
 		if (!step) return;
-		const result = applyMove(boardState, step.move);
+		const replayState = replayStateRef.current ?? selectedMatch.initialState;
+		const result = applyMove(replayState, step.move);
 		if (!result.ok) {
 			setActionLog((prev) =>
 				[`[${replayPly}] ERR: ${result.error}`, ...prev].slice(0, 200),
 			);
 			return;
 		}
+		replayStateRef.current = result.state;
 
 		const envelope: EngineEventsEnvelopeV1 = {
 			eventVersion: 1,
@@ -267,7 +275,15 @@ function DevLayout() {
 			[`[${replayPly}] ${step.playerID}: ${moveText}`, ...prev].slice(0, 200),
 		);
 		setReplayPly((p) => p + 1);
-	}, [selectedMatch, replayPly, boardState, enqueue]);
+	}, [selectedMatch, replayPly, enqueue]);
+
+	useEffect(() => {
+		if (mode !== "replay" || !selectedMatch) {
+			replayStateRef.current = null;
+			return;
+		}
+		replayStateRef.current = selectedMatch.initialState;
+	}, [mode, selectedMatch]);
 
 	// Auto-play interval
 	useEffect(() => {
@@ -302,9 +318,11 @@ function DevLayout() {
 			setReplayPlaying(false);
 			resetAnimator();
 			if (m === "sandbox") {
+				replayStateRef.current = null;
 				setBoardState(createPreviewState(seed));
 				setMoveCount(0);
 			} else if (m === "replay" && selectedMatch) {
+				replayStateRef.current = selectedMatch.initialState;
 				setBoardState(selectedMatch.initialState);
 				setReplayPly(0);
 				setActionLog([]);

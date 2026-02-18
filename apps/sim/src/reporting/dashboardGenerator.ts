@@ -514,7 +514,7 @@ export class DashboardGenerator {
 
 		const opening = data.openingChoice[0];
 		const openingText = opening
-			? `${opening.label} (${(opening.rate * 100).toFixed(1)}%)`
+			? `${escapeHtml(opening.label)} (${(opening.rate * 100).toFixed(1)}%)`
 			: "n/a";
 		const spikes =
 			data.powerSpikeTurns.length > 0
@@ -540,11 +540,14 @@ export class DashboardGenerator {
 
 		const top = data.distribution[0];
 		const topText = top
-			? `${top.archetype} (${(top.rate * 100).toFixed(1)}%)`
+			? `${escapeHtml(top.archetype)} (${(top.rate * 100).toFixed(1)}%)`
 			: "n/a";
 		const mix = data.distribution
 			.slice(0, 4)
-			.map((item) => `${item.archetype}: ${(item.rate * 100).toFixed(1)}%`)
+			.map(
+				(item) =>
+					`${escapeHtml(item.archetype)}: ${(item.rate * 100).toFixed(1)}%`,
+			)
 			.join(", ");
 
 		return [
@@ -564,17 +567,21 @@ export class DashboardGenerator {
 
 		return anomalies
 			.slice(0, 50)
-			.map(
-				(anomaly) => `
-			<div class="anomaly-item">
-				<span class="anomaly-severity severity-${anomaly.severity}">${anomaly.severity}</span>
-				<div class="anomaly-content">
-					<div class="anomaly-type">${anomaly.type}</div>
-					<div class="anomaly-desc">${anomaly.description} (Seed: ${anomaly.seed})</div>
+			.map((anomaly) => {
+				const severity = escapeHtml(String(anomaly.severity));
+				const type = escapeHtml(String(anomaly.type));
+				const description = escapeHtml(String(anomaly.description));
+				const seed = escapeHtml(String(anomaly.seed));
+				return `
+				<div class="anomaly-item">
+					<span class="anomaly-severity severity-${severity}">${severity}</span>
+					<div class="anomaly-content">
+						<div class="anomaly-type">${type}</div>
+						<div class="anomaly-desc">${description} (Seed: ${seed})</div>
+					</div>
 				</div>
-			</div>
-		`,
-			)
+			`;
+			})
 			.join("");
 	}
 }
@@ -582,6 +589,15 @@ export class DashboardGenerator {
 function formatTurn(value: number | null): string {
 	if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
 	return value.toFixed(1);
+}
+
+function escapeHtml(value: string): string {
+	return value
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("'", "&#39;");
 }
 
 export function generateDashboard(

@@ -66,33 +66,53 @@ export function matchCommand(
 	cmd: ParsedCommand,
 	legalMoves: Move[],
 ): Move | null {
-	for (const move of legalMoves) {
-		if (move.action !== cmd.action) continue;
+	const normalizedCmd = normalizeParsedCommand(cmd);
 
-		switch (cmd.action) {
+	for (const move of legalMoves) {
+		if (normalizeAction(move.action) !== normalizedCmd.action) continue;
+
+		switch (normalizedCmd.action) {
 			case "move": {
 				const m = move as Extract<Move, { action: "move" }>;
-				if (m.unitId === cmd.unitId && m.to === cmd.target) return move;
+				if (
+					normalizeValue(m.unitId) === normalizeValue(normalizedCmd.unitId) &&
+					normalizeValue(m.to) === normalizeValue(normalizedCmd.target)
+				) {
+					return move;
+				}
 				break;
 			}
 			case "attack": {
 				const m = move as Extract<Move, { action: "attack" }>;
-				if (m.unitId === cmd.unitId && m.target === cmd.target) return move;
+				if (
+					normalizeValue(m.unitId) === normalizeValue(normalizedCmd.unitId) &&
+					normalizeValue(m.target) === normalizeValue(normalizedCmd.target)
+				) {
+					return move;
+				}
 				break;
 			}
 			case "recruit": {
 				const m = move as Extract<Move, { action: "recruit" }>;
-				if (m.unitType === cmd.unitType && m.at === cmd.target) return move;
+				if (
+					normalizeValue(m.unitType) ===
+						normalizeValue(normalizedCmd.unitType) &&
+					normalizeValue(m.at) === normalizeValue(normalizedCmd.target)
+				) {
+					return move;
+				}
 				break;
 			}
 			case "fortify": {
 				const m = move as Extract<Move, { action: "fortify" }>;
-				if (m.unitId === cmd.unitId) return move;
+				if (normalizeValue(m.unitId) === normalizeValue(normalizedCmd.unitId))
+					return move;
 				break;
 			}
 			case "upgrade": {
 				const m = move as Extract<Move, { action: "upgrade" }>;
-				if (m.unitId === cmd.unitId) return move;
+				if (normalizeValue(m.unitId) === normalizeValue(normalizedCmd.unitId))
+					return move;
 				break;
 			}
 			case "end_turn": {
@@ -221,4 +241,44 @@ function cleanToken(token: string | undefined): string | undefined {
 	if (!token) return undefined;
 	const cleaned = token.replace(/[^A-Za-z0-9_-]/g, "");
 	return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function normalizeParsedCommand(cmd: ParsedCommand): ParsedCommand {
+	switch (cmd.action) {
+		case "move":
+			return {
+				action: "move",
+				unitId: normalizeValue(cmd.unitId),
+				target: normalizeValue(cmd.target),
+			};
+		case "attack":
+			return {
+				action: "attack",
+				unitId: normalizeValue(cmd.unitId),
+				target: normalizeValue(cmd.target),
+			};
+		case "recruit":
+			return {
+				action: "recruit",
+				unitType: normalizeValue(cmd.unitType),
+				target: normalizeValue(cmd.target),
+			};
+		case "fortify":
+			return { action: "fortify", unitId: normalizeValue(cmd.unitId) };
+		case "upgrade":
+			return { action: "upgrade", unitId: normalizeValue(cmd.unitId) };
+		case "end_turn":
+			return cmd;
+	}
+}
+
+function normalizeAction(action: string): string {
+	const lower = action.toLowerCase();
+	return lower === "pass" ? "end_turn" : lower;
+}
+
+function normalizeValue(value: string): string;
+function normalizeValue(value: string | undefined): string | undefined;
+function normalizeValue(value: string | undefined): string | undefined {
+	return value?.toLowerCase();
 }

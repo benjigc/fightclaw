@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 type ThoughtPanelProps = {
 	player: "A" | "B";
@@ -12,6 +12,17 @@ export function ThoughtPanel({
 	isThinking,
 }: ThoughtPanelProps) {
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const thoughtItems = useMemo(() => {
+		const counts = new Map<string, number>();
+		return thoughts.map((text) => {
+			const count = (counts.get(text) ?? 0) + 1;
+			counts.set(text, count);
+			return {
+				text,
+				key: `t-${player}-${text}-${count}`,
+			};
+		});
+	}, [player, thoughts]);
 
 	const thoughtCount = thoughts.length;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new thoughts
@@ -37,9 +48,9 @@ export function ThoughtPanel({
 						Awaiting agent connection...
 					</div>
 				) : (
-					thoughts.map((text, i) => (
+					thoughtItems.map(({ text, key }) => (
 						<div
-							key={`t-${i}-${text.slice(0, 8)}`}
+							key={key}
 							className={`thought-line player-${player.toLowerCase()}-color`}
 						>
 							{text}

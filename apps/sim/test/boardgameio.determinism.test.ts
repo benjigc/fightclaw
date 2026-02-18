@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { playMatch } from "../src/match";
@@ -25,17 +25,21 @@ describe("boardgameio determinism", () => {
 	test("same seed and bots yields identical accepted move list", async () => {
 		const run = async () => {
 			const dir = mkdtempSync(path.join(tmpdir(), "fightclaw-bgio-det-"));
-			await playMatch({
-				seed: 19,
-				players: [makeDeterministicBot("P1"), makeDeterministicBot("P2")],
-				maxTurns: 14,
-				harness: "boardgameio",
-				strict: true,
-				artifactDir: dir,
-			});
-			const file = readdirSync(dir).find((name) => name.endsWith(".json"));
-			if (!file) throw new Error("artifact not found");
-			return JSON.parse(readFileSync(path.join(dir, file), "utf8"));
+			try {
+				await playMatch({
+					seed: 19,
+					players: [makeDeterministicBot("P1"), makeDeterministicBot("P2")],
+					maxTurns: 14,
+					harness: "boardgameio",
+					strict: true,
+					artifactDir: dir,
+				});
+				const file = readdirSync(dir).find((name) => name.endsWith(".json"));
+				if (!file) throw new Error("artifact not found");
+				return JSON.parse(readFileSync(path.join(dir, file), "utf8"));
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
 		};
 
 		const a = await run();

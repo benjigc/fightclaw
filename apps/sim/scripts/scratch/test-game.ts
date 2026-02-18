@@ -1,9 +1,15 @@
 import { makeLlmBot } from "../../src/bots/llmBot";
 import { Engine } from "../../src/engineAdapter";
 
+const openRouterKey = process.env.OPENROUTER_API_KEY;
+if (!openRouterKey) {
+	console.error("OPENROUTER_API_KEY is required to run this script.");
+	process.exit(1);
+}
+
 const bot = makeLlmBot("P1", {
 	model: "arcee-ai/trinity-large-preview:free",
-	apiKey: process.env.OPENROUTER_API_KEY || "",
+	apiKey: openRouterKey,
 	systemPrompt: "Prioritize aggressive attacks",
 	delayMs: 0,
 });

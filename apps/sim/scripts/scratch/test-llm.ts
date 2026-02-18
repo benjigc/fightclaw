@@ -1,7 +1,13 @@
 import OpenAI from "openai";
 
+const openRouterKey = process.env.OPENROUTER_API_KEY;
+if (!openRouterKey) {
+	console.error("OPENROUTER_API_KEY is required to run this script.");
+	process.exit(1);
+}
+
 const client = new OpenAI({
-	apiKey: process.env.OPENROUTER_API_KEY || "",
+	apiKey: openRouterKey,
 	baseURL: "https://openrouter.ai/api/v1",
 });
 

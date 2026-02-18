@@ -184,11 +184,31 @@ async function playMatchLegacy(opts: {
 
 				if (!isLegal) {
 					illegalMoves++;
-					if (opts.verbose)
+					if (!opts.autofixIllegal) {
+						if (opts.verbose) {
+							console.warn(
+								`[turn ${turn}] bot ${bot.name} chose illegal batch move: ${short(batchMove)}`,
+							);
+						}
+						const result: MatchResult = {
+							seed: opts.seed,
+							turns: turn - 1,
+							winner: null,
+							illegalMoves,
+							reason: "illegal",
+							log: logIfNeeded(),
+						};
+						if (opts.enableDiagnostics) {
+							getDiagnosticsCollector().endGame(result.winner, result.reason);
+						}
+						return result;
+					}
+					if (opts.verbose) {
 						console.warn(
 							`[turn ${turn}] batch move skipped: ${short(batchMove)}`,
 						);
-					continue; // skip this move
+					}
+					continue; // skip this move when autofix is enabled
 				}
 
 				const engineBatchMove = stripReasoning(batchMove);

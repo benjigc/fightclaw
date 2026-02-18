@@ -39,6 +39,8 @@ type StateEvent = {
 	state: MatchState;
 };
 
+const MAX_THOUGHTS = 80;
+
 function SpectatorLanding() {
 	const search = Route.useSearch();
 	const replayMatchId = search.replayMatchId ?? null;
@@ -194,7 +196,7 @@ function SpectatorLanding() {
 
 			const { player: p, text } = payload;
 			const setter = p === "A" ? setThoughtsA : setThoughtsB;
-			setter((prev) => [...prev, text]);
+			setter((prev) => [...prev, text].slice(-MAX_THOUGHTS));
 		};
 
 		eventSource.addEventListener("state", handleStateEvent as EventListener);

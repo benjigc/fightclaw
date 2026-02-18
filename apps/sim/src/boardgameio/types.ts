@@ -143,6 +143,8 @@ export interface MatchArtifact {
 	redactionApplied: boolean;
 	seed: number;
 	scenario?: ScenarioName;
+	engineConfig?: EngineConfigInput;
+	boardColumns?: 17 | 21;
 	participants: [AgentId, AgentId];
 	invalidPolicy: InvalidPolicy;
 	acceptedMoves: AcceptedMoveRecord[];

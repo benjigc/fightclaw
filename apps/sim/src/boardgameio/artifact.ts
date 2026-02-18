@@ -52,6 +52,8 @@ export class ArtifactBuilder {
 			redactionApplied: false,
 			seed: config.seed,
 			scenario: config.scenario,
+			engineConfig: config.engineConfig,
+			boardColumns: config.engineConfig?.boardColumns ?? 21,
 			participants: config.players,
 			invalidPolicy: config.invalidPolicy,
 			acceptedMoves: [],

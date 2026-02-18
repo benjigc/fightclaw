@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { encodeLegalMoves, encodeState } from "../src/bots/stateEncoder";
 import { Engine } from "../src/engineAdapter";
+import { createCombatScenario } from "../src/scenarios/combatScenarios";
 
 describe("stateEncoder", () => {
 	test("encodeState produces compact notation", () => {
@@ -44,9 +45,6 @@ describe("stateEncoder", () => {
 	});
 
 	test("encodeState includes contested nearby terrain context", () => {
-		const {
-			createCombatScenario,
-		} = require("../src/scenarios/combatScenarios");
 		const state = createCombatScenario(1, ["a", "b"], "high_ground_clash");
 		const encoded = encodeState(state, "A");
 		expect(encoded).toContain("TERRAIN_CONTESTED_NEARBY:");
@@ -73,9 +71,6 @@ describe("stateEncoder", () => {
 
 	test("encodeLegalMoves shows attack targets when available", () => {
 		// Use midfield scenario to get attack moves
-		const {
-			createCombatScenario,
-		} = require("../src/scenarios/combatScenarios");
 		const state = createCombatScenario(1, ["a", "b"], "midfield");
 		const moves = Engine.listLegalMoves(state);
 		const encoded = encodeLegalMoves(moves, state);

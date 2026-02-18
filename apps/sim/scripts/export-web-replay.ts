@@ -107,19 +107,22 @@ function findArtifactFiles(runDir: string): string[] {
 }
 
 function createInitialStateForArtifact(artifact: MatchArtifact): MatchState {
+	const boardColumns =
+		artifact.boardColumns ?? artifact.engineConfig?.boardColumns ?? 17;
+	const engineConfig = {
+		...(artifact.engineConfig ?? {}),
+		boardColumns,
+	};
+
 	if (artifact.scenario) {
 		return createCombatScenario(
 			artifact.seed,
 			artifact.participants,
 			artifact.scenario,
-			{ boardColumns: 17 },
+			engineConfig,
 		);
 	}
-	return createInitialState(
-		artifact.seed,
-		{ boardColumns: 17 },
-		artifact.participants,
-	);
+	return createInitialState(artifact.seed, engineConfig, artifact.participants);
 }
 
 function toReplayMatch(file: string): ReplayMatch {
