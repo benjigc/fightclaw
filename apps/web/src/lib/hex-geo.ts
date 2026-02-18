@@ -2,6 +2,8 @@ import { type HexId, parseHexId } from "@fightclaw/engine";
 
 export type PixelPoint = { x: number; y: number };
 
+export const STACK_OFFSET_Y = 4; // SVG units per elevation layer
+
 export const BOARD_ROWS = 9;
 export const BOARD_COLS = 21;
 export const HEX_RADIUS = 20;
