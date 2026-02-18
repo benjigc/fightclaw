@@ -38,10 +38,17 @@ export function hexPoints(cx: number, cy: number, R: number): string {
 	return pts.join(" ");
 }
 
-/** viewBox string that fits the entire 21×9 board with padding. */
+/** viewBox string that fits the entire 21×9 board with padding.
+ *
+ * Odd rows shift right by W/2, so the board's natural content spans
+ * from 0 to BOARD_COLS*W + W/2. We add W/4 of extra left-padding to
+ * visually centre the board (half the odd-row shift), giving symmetric
+ * empty space on both sides.
+ */
 export function boardViewBox(R: number, pad = 4): string {
 	const W = Math.sqrt(3) * R;
-	const totalW = BOARD_COLS * W + W / 2 + pad * 2;
+	const extraLeft = W / 4; // compensate for odd-row right-shift
+	const totalW = BOARD_COLS * W + W / 2 + pad * 2 + extraLeft;
 	const totalH = (BOARD_ROWS - 1) * R * 1.5 + 2 * R + pad * 2;
-	return `${-pad} ${-pad} ${totalW.toFixed(1)} ${totalH.toFixed(1)}`;
+	return `${-(pad + extraLeft)} ${-pad} ${totalW.toFixed(1)} ${totalH.toFixed(1)}`;
 }

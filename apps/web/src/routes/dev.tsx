@@ -377,12 +377,13 @@ function DevLayout() {
 				{/* Horizontal dev controls bar */}
 				<div className="dev-panel">
 					{/* Mode toggle */}
-					<div className="dev-panel-section">
+					<div className="dev-panel-section" style={{ minWidth: 140 }}>
 						<div className="dev-panel-label">Mode</div>
 						<div className="dev-panel-row">
 							<button
 								type="button"
 								className={`dev-panel-btn ${mode === "sandbox" ? "dev-panel-btn-primary" : ""}`}
+								style={{ flex: 1 }}
 								onClick={() => switchMode("sandbox")}
 							>
 								Sandbox
@@ -390,6 +391,7 @@ function DevLayout() {
 							<button
 								type="button"
 								className={`dev-panel-btn ${mode === "replay" ? "dev-panel-btn-primary" : ""}`}
+								style={{ flex: 1 }}
 								onClick={() => switchMode("replay")}
 							>
 								Replay
