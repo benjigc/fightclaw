@@ -6,7 +6,7 @@ import {
 	type Move,
 } from "@fightclaw/engine";
 import { env } from "@fightclaw/env/web";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { HexBoard } from "@/components/arena/hex-board";
@@ -15,11 +15,6 @@ import {
 	type EngineEventsEnvelopeV1,
 	useArenaAnimator,
 } from "@/lib/arena-animator";
-
-const NAV_LINKS = [
-	{ to: "/leaderboard" as const, label: "Leaderboard" },
-	...(import.meta.env.DEV ? [{ to: "/dev" as const, label: "Dev" }] : []),
-];
 
 export const Route = createFileRoute("/")({
 	component: SpectatorLanding,
@@ -453,13 +448,6 @@ function SpectatorLanding() {
 						"WAR OF ATTRITION"
 					)}
 				</span>
-				<nav className="flex gap-4">
-					{NAV_LINKS.map(({ to, label }) => (
-						<Link key={to} to={to}>
-							{label}
-						</Link>
-					))}
-				</nav>
 			</div>
 
 			{/* Three-column layout: thought panel | board | thought panel */}

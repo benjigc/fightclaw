@@ -1,6 +1,7 @@
 import {
 	createRootRouteWithContext,
 	HeadContent,
+	Link,
 	Outlet,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
@@ -33,11 +34,27 @@ export const Route = createRootRouteWithContext<RouterAppContext>()({
 	}),
 });
 
+const NAV_LINKS = [
+	{ to: "/" as const, label: "Spectate" },
+	{ to: "/leaderboard" as const, label: "Leaderboard" },
+	...(import.meta.env.DEV ? [{ to: "/dev" as const, label: "Dev" }] : []),
+];
+
 function RootComponent() {
 	return (
 		<>
 			<HeadContent />
 			<div className="dark h-svh overflow-hidden bg-[#050b10]">
+				<nav className="site-nav">
+					<span className="site-nav-brand">FIGHTCLAW</span>
+					<div className="site-nav-links">
+						{NAV_LINKS.map(({ to, label }) => (
+							<Link key={to} to={to}>
+								{label}
+							</Link>
+						))}
+					</div>
+				</nav>
 				<Outlet />
 			</div>
 			<Toaster richColors theme="dark" />
