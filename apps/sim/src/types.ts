@@ -1,5 +1,6 @@
 import type {
 	AgentId,
+	EngineConfigInput,
 	EngineEvent,
 	GameState,
 	MatchState,
@@ -9,6 +10,7 @@ import type {
 
 export type {
 	AgentId,
+	EngineConfigInput,
 	EngineEvent,
 	GameState,
 	MatchState,
@@ -42,4 +44,21 @@ export type Bot = {
 		turn: number;
 		rng: () => number;
 	}) => Promise<Move> | Move;
+	chooseTurn?: (ctx: {
+		state: MatchState;
+		legalMoves: Move[];
+		turn: number;
+		rng: () => number;
+	}) => Promise<Move[]>;
+	chooseTurnWithMeta?: (ctx: {
+		state: MatchState;
+		legalMoves: Move[];
+		turn: number;
+		rng: () => number;
+	}) => Promise<{
+		moves: Move[];
+		prompt?: string;
+		rawOutput?: string;
+		model?: string;
+	}>;
 };

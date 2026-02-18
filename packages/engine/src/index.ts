@@ -1,10 +1,10 @@
 import { z } from "zod";
 
-// War of Attrition v2 — 21x9 hex grid, HexId coords, resource reserves, abilities
+// War of Attrition v2 — 9-row hex grid, HexId coords, resource reserves, abilities
 
 export type AgentId = string;
 export type PlayerSide = "A" | "B";
-export type HexId = string; // "A1".."I21"
+export type HexId = string; // "A1".."I17" or "A1".."I21"
 export type HexType =
 	| "plains"
 	| "forest"
@@ -17,18 +17,21 @@ export type HexType =
 	| "stronghold_b"
 	| "deploy_a"
 	| "deploy_b";
-export type UnitType = "infantry" | "cavalry" | "archer";
+export type BaseUnitType = "infantry" | "cavalry" | "archer";
+export type Tier2UnitType = "swordsman" | "knight" | "crossbow";
+export type UnitType = BaseUnitType | Tier2UnitType;
 
 export type Move =
 	| { action: "move"; unitId: string; to: HexId; reasoning?: string }
 	| { action: "attack"; unitId: string; target: HexId; reasoning?: string }
 	| {
 			action: "recruit";
-			unitType: UnitType;
+			unitType: BaseUnitType;
 			at: HexId;
 			reasoning?: string;
 	  }
 	| { action: "fortify"; unitId: string; reasoning?: string }
+	| { action: "upgrade"; unitId: string; reasoning?: string }
 	| { action: "end_turn"; reasoning?: string }
 	| { action: "pass"; reasoning?: string };
 
@@ -112,7 +115,7 @@ export type EngineEvent =
 			turn: number;
 			player: PlayerSide;
 			unitId: string;
-			unitType: UnitType;
+			unitType: BaseUnitType;
 			at: HexId;
 	  }
 	| {
@@ -128,6 +131,15 @@ export type EngineEvent =
 			turn: number;
 			player: PlayerSide;
 			unitId: string;
+			at: HexId;
+	  }
+	| {
+			type: "upgrade";
+			turn: number;
+			player: PlayerSide;
+			unitId: string;
+			fromType: BaseUnitType;
+			toType: Tier2UnitType;
 			at: HexId;
 	  }
 	| {
@@ -194,18 +206,20 @@ export type ApplyMoveResult =
 // ---------------------------------------------------------------------------
 
 const ROWS = 9;
-const COLS = 21;
 const ACTIONS_PER_TURN = 5;
 const TURN_LIMIT = 20;
+const FORTIFY_WOOD_COST = 2;
 const PLAYER_SIDES: PlayerSide[] = ["A", "B"];
 
 const ROW_LETTERS = "ABCDEFGHI";
 
-// Stronghold positions per side
-const STRONGHOLD_HEXES: Record<PlayerSide, [HexId, HexId]> = {
-	A: ["B2", "H2"],
-	B: ["B20", "H20"],
-};
+const BOARD_17_CANONICAL_COL_MAP = [
+	0, 1, 2, 3, 4, 5, 6, 7, 10, 13, 14, 15, 16, 17, 18, 19, 20,
+] as const;
+
+function currentCols(): number {
+	return resolveConfig().boardColumns;
+}
 
 // ---------------------------------------------------------------------------
 // HexId coordinate helpers
@@ -226,7 +240,7 @@ export function toHexId(row: number, col: number): HexId {
 
 function hexIdIndex(id: HexId): number {
 	const { row, col } = parseHexId(id);
-	return row * COLS + col;
+	return row * currentCols() + col;
 }
 
 function isValidHexId(s: string): boolean {
@@ -235,7 +249,9 @@ function isValidHexId(s: string): boolean {
 	const rowIdx = rowChar.charCodeAt(0) - 65;
 	if (rowIdx < 0 || rowIdx >= ROWS) return false;
 	const colNum = Number(s.slice(1));
-	if (!Number.isInteger(colNum) || colNum < 1 || colNum > COLS) return false;
+	if (!Number.isInteger(colNum) || colNum < 1 || colNum > currentCols()) {
+		return false;
+	}
 	return true;
 }
 
@@ -268,7 +284,7 @@ function neighbors(row: number, col: number): HexId[] {
 	for (const [dc, dr] of deltas) {
 		const nr = row + dr;
 		const nc = col + dc;
-		if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
+		if (nr >= 0 && nr < ROWS && nc >= 0 && nc < currentCols()) {
 			result.push(toHexId(nr, nc));
 		}
 	}
@@ -393,7 +409,15 @@ export const HexIdSchema = z
 	.string()
 	.regex(/^[A-I](1[0-9]|2[01]|[1-9])$/, "Invalid HexId");
 
-export const UnitTypeSchema = z.enum(["infantry", "cavalry", "archer"]);
+export const UnitTypeSchema = z.enum([
+	"infantry",
+	"cavalry",
+	"archer",
+	"swordsman",
+	"knight",
+	"crossbow",
+]);
+export const BaseUnitTypeSchema = z.enum(["infantry", "cavalry", "archer"]);
 
 export const MoveSchema = z.discriminatedUnion("action", [
 	z
@@ -415,7 +439,7 @@ export const MoveSchema = z.discriminatedUnion("action", [
 	z
 		.object({
 			action: z.literal("recruit"),
-			unitType: UnitTypeSchema,
+			unitType: BaseUnitTypeSchema,
 			at: HexIdSchema,
 			reasoning: z.string().optional(),
 		})
@@ -423,6 +447,13 @@ export const MoveSchema = z.discriminatedUnion("action", [
 	z
 		.object({
 			action: z.literal("fortify"),
+			unitId: z.string(),
+			reasoning: z.string().optional(),
+		})
+		.strict(),
+	z
+		.object({
+			action: z.literal("upgrade"),
 			unitId: z.string(),
 			reasoning: z.string().optional(),
 		})
@@ -509,6 +540,7 @@ export const GameStateSchema = MatchStateSchema;
 export type EngineConfig = {
 	actionsPerTurn: number;
 	turnLimit: number;
+	boardColumns: 17 | 21;
 	startingGold: number;
 	startingWood: number;
 	unitStats: {
@@ -536,8 +568,34 @@ export type EngineConfig = {
 			range: number;
 			hp: number;
 		};
+		swordsman: {
+			cost: number;
+			attack: number;
+			defense: number;
+			movement: number;
+			range: number;
+			hp: number;
+		};
+		knight: {
+			cost: number;
+			attack: number;
+			defense: number;
+			movement: number;
+			range: number;
+			hp: number;
+		};
+		crossbow: {
+			cost: number;
+			attack: number;
+			defense: number;
+			movement: number;
+			range: number;
+			hp: number;
+		};
 	};
+	upgradeCosts: Record<BaseUnitType, { gold: number; wood: number }>;
 	terrainDefenseBonus: Record<HexType, number>;
+	fortifyDefenseBonusByTerrain: Partial<Record<HexType, number>>;
 	abilities: {
 		cavalryChargeBonus: number;
 		infantryAdjacencyBonusCap: number;
@@ -555,6 +613,14 @@ export type EngineConfig = {
 		lumberCampTick: number;
 		strongholdGoldTick: number;
 		crownVpTick: number;
+		economicNodeControlThreshold: number;
+		economicNodeBonusGold: number;
+		economicNodeBonusWood: number;
+		comebackVpDeficitThreshold: number;
+		comebackUnitDeficitThreshold: number;
+		comebackHexDeficitThreshold: number;
+		comebackGoldBonus: number;
+		comebackWoodBonus: number;
 	};
 };
 
@@ -563,6 +629,7 @@ export type EngineConfigInput = Partial<EngineConfig>;
 export const DEFAULT_CONFIG: EngineConfig = {
 	actionsPerTurn: ACTIONS_PER_TURN,
 	turnLimit: TURN_LIMIT,
+	boardColumns: 21,
 	startingGold: 15,
 	startingWood: 5,
 	unitStats: {
@@ -590,6 +657,35 @@ export const DEFAULT_CONFIG: EngineConfig = {
 			range: 2,
 			hp: 2,
 		},
+		swordsman: {
+			cost: 20,
+			attack: 3,
+			defense: 3,
+			movement: 2,
+			range: 1,
+			hp: 4,
+		},
+		knight: {
+			cost: 30,
+			attack: 5,
+			defense: 5,
+			movement: 4,
+			range: 1,
+			hp: 5,
+		},
+		crossbow: {
+			cost: 24,
+			attack: 4,
+			defense: 2,
+			movement: 3,
+			range: 2,
+			hp: 3,
+		},
+	},
+	upgradeCosts: {
+		infantry: { gold: 9, wood: 3 },
+		cavalry: { gold: 15, wood: 5 },
+		archer: { gold: 12, wood: 4 },
 	},
 	terrainDefenseBonus: {
 		plains: 0,
@@ -604,12 +700,19 @@ export const DEFAULT_CONFIG: EngineConfig = {
 		stronghold_a: 1,
 		stronghold_b: 1,
 	},
+	fortifyDefenseBonusByTerrain: {
+		forest: 1,
+		hills: 1,
+		high_ground: 1,
+		stronghold_a: 1,
+		stronghold_b: 1,
+	},
 	abilities: {
 		cavalryChargeBonus: 2,
-		infantryAdjacencyBonusCap: 2,
+		infantryAdjacencyBonusCap: 1,
 		archerMeleeVulnerability: 1,
 		fortifyBonus: 1,
-		attackerBonus: 1,
+		attackerBonus: 2,
 		stackAttackBonus: 1,
 		maxStackSize: 5,
 		vpPerKill: 1,
@@ -621,6 +724,14 @@ export const DEFAULT_CONFIG: EngineConfig = {
 		lumberCampTick: 2,
 		strongholdGoldTick: 2,
 		crownVpTick: 1,
+		economicNodeControlThreshold: 2,
+		economicNodeBonusGold: 1,
+		economicNodeBonusWood: 1,
+		comebackVpDeficitThreshold: 2,
+		comebackUnitDeficitThreshold: 2,
+		comebackHexDeficitThreshold: 6,
+		comebackGoldBonus: 2,
+		comebackWoodBonus: 1,
 	},
 };
 
@@ -642,10 +753,30 @@ function mergeConfig(input?: EngineConfigInput): EngineConfig {
 				...DEFAULT_CONFIG.unitStats.archer,
 				...input.unitStats?.archer,
 			},
+			swordsman: {
+				...DEFAULT_CONFIG.unitStats.swordsman,
+				...input.unitStats?.swordsman,
+			},
+			knight: {
+				...DEFAULT_CONFIG.unitStats.knight,
+				...input.unitStats?.knight,
+			},
+			crossbow: {
+				...DEFAULT_CONFIG.unitStats.crossbow,
+				...input.unitStats?.crossbow,
+			},
+		},
+		upgradeCosts: {
+			...DEFAULT_CONFIG.upgradeCosts,
+			...input.upgradeCosts,
 		},
 		terrainDefenseBonus: {
 			...DEFAULT_CONFIG.terrainDefenseBonus,
 			...input.terrainDefenseBonus,
+		},
+		fortifyDefenseBonusByTerrain: {
+			...DEFAULT_CONFIG.fortifyDefenseBonusByTerrain,
+			...input.fortifyDefenseBonusByTerrain,
 		},
 		abilities: { ...DEFAULT_CONFIG.abilities, ...input.abilities },
 		resourceNodes: {
@@ -663,8 +794,62 @@ function resolveConfig(): EngineConfig {
 	return _activeConfig;
 }
 
+const UPGRADE_PATH: Record<BaseUnitType, Tier2UnitType> = {
+	infantry: "swordsman",
+	cavalry: "knight",
+	archer: "crossbow",
+};
+
+function isBaseUnitType(unitType: UnitType): unitType is BaseUnitType {
+	return (
+		unitType === "infantry" || unitType === "cavalry" || unitType === "archer"
+	);
+}
+
+function isCavalryLine(unitType: UnitType): boolean {
+	return unitType === "cavalry" || unitType === "knight";
+}
+
+function isInfantryLine(unitType: UnitType): boolean {
+	return unitType === "infantry" || unitType === "swordsman";
+}
+
+function isArcherLine(unitType: UnitType): boolean {
+	return unitType === "archer" || unitType === "crossbow";
+}
+
+function canonicalColForBoardCol(
+	boardCol: number,
+	boardColumns: 17 | 21,
+): number {
+	if (boardColumns === 21) return boardCol;
+	return BOARD_17_CANONICAL_COL_MAP[boardCol] ?? boardCol;
+}
+
+function mapCanonicalHexToBoardHex(
+	hex: HexId,
+	boardColumns: 17 | 21,
+): HexId | null {
+	const { row, col } = parseHexId(hex);
+	if (boardColumns === 21) return hex;
+	if (boardColumns !== 17) return null;
+	const boardCol = (BOARD_17_CANONICAL_COL_MAP as readonly number[]).indexOf(
+		col,
+	);
+	if (boardCol === -1) return null;
+	return toHexId(row, boardCol);
+}
+
+function strongholdHexesForState(state: MatchState, side: PlayerSide): HexId[] {
+	const strongholdType = side === "A" ? "stronghold_a" : "stronghold_b";
+	return state.board
+		.filter((h) => h.type === strongholdType)
+		.map((h) => h.id)
+		.sort((a, b) => a.localeCompare(b));
+}
+
 // ---------------------------------------------------------------------------
-// Canonical board layout (189 hexes)
+// Canonical board layout (21x9 = 189 hexes)
 // ---------------------------------------------------------------------------
 
 type TerrainToken =
@@ -915,11 +1100,15 @@ const CANONICAL_TERRAIN: TerrainToken[][] = [
 ];
 
 function buildCanonicalBoard(config: EngineConfig): HexState[] {
+	if (config.boardColumns !== 21 && config.boardColumns !== 17) {
+		throw new Error(`Unsupported boardColumns=${String(config.boardColumns)}`);
+	}
 	const board: HexState[] = [];
 	for (let row = 0; row < ROWS; row++) {
 		const rowTerrain = CANONICAL_TERRAIN[row]!;
-		for (let col = 0; col < COLS; col++) {
-			const token = rowTerrain[col]!;
+		for (let col = 0; col < config.boardColumns; col++) {
+			const canonicalCol = canonicalColForBoardCol(col, config.boardColumns);
+			const token = rowTerrain[canonicalCol]!;
 			const hexType = TOKEN_TO_HEX_TYPE[token];
 			const id = toHexId(row, col);
 
@@ -1110,6 +1299,7 @@ function runStartOfPlayerTurnTick(
 ): TickResult {
 	const config = resolveConfig();
 	const player = state.players[side];
+	const enemy = state.players[otherSide(side)];
 
 	// 1. Reset flags on active player's units
 	for (const unit of player.units) {
@@ -1144,6 +1334,44 @@ function runStartOfPlayerTurnTick(
 		} else if (hex.type === "crown") {
 			vpGained += config.resourceNodes.crownVpTick;
 		}
+	}
+
+	// Long-horizon macro: holding multiple economy nodes compounds income.
+	let controlledEconomicNodes = 0;
+	for (const hex of state.board) {
+		if (hex.controlledBy !== side) continue;
+		if (hex.type === "gold_mine" || hex.type === "lumber_camp") {
+			controlledEconomicNodes += 1;
+		}
+	}
+	const economicNodeThreshold = Math.max(
+		1,
+		config.resourceNodes.economicNodeControlThreshold,
+	);
+	const economicTiers = Math.floor(
+		controlledEconomicNodes / economicNodeThreshold,
+	);
+	if (economicTiers > 0) {
+		goldIncome += economicTiers * config.resourceNodes.economicNodeBonusGold;
+		woodIncome += economicTiers * config.resourceNodes.economicNodeBonusWood;
+	}
+
+	// Comeback macro: trailing players receive a small stabilizer stipend.
+	const vpDeficit =
+		enemy.vp - player.vp >= config.resourceNodes.comebackVpDeficitThreshold;
+	const unitDeficit =
+		enemy.units.length - player.units.length >=
+		config.resourceNodes.comebackUnitDeficitThreshold;
+	const hexDeficit =
+		controlledHexCount(state, otherSide(side)) -
+			controlledHexCount(state, side) >=
+		config.resourceNodes.comebackHexDeficitThreshold;
+	const comebackSignals = [vpDeficit, unitDeficit, hexDeficit].filter(
+		Boolean,
+	).length;
+	if (comebackSignals >= 2) {
+		goldIncome += config.resourceNodes.comebackGoldBonus;
+		woodIncome += config.resourceNodes.comebackWoodBonus;
 	}
 
 	player.gold += goldIncome;
@@ -1263,9 +1491,9 @@ function computeCombat(
 		abilities.push(`stack_atk_+${attackStackExtra}`);
 	}
 
-	// Cavalry charge: +2 if cavalry, moved this turn with distance >= 2,
+	// Cavalry line charge: +2 if cavalry/knight, moved this turn with distance >= 2,
 	// and there was a forest-free shortest path
-	if (leadAttacker.type === "cavalry" && leadAttacker.chargeEligible) {
+	if (isCavalryLine(leadAttacker.type) && leadAttacker.chargeEligible) {
 		attackPower += config.abilities.cavalryChargeBonus;
 		abilities.push("cavalry_charge");
 	}
@@ -1282,11 +1510,24 @@ function computeCombat(
 	// Fortify bonus (any unit in stack fortified applies)
 	if (defenders.some((d) => d.isFortified)) {
 		defensePower += config.abilities.fortifyBonus;
+		if (defenderHex) {
+			defensePower +=
+				config.fortifyDefenseBonusByTerrain[defenderHex.type] ?? 0;
+		}
 		abilities.push("fortify");
+	}
+	// Slight melee pressure against fortified infantry to reduce stall loops.
+	if (
+		dist === 1 &&
+		isInfantryLine(leadDefender.type) &&
+		defenders.some((d) => d.isFortified)
+	) {
+		defensePower = Math.max(0, defensePower - 1);
+		abilities.push("fortify_breached");
 	}
 
 	// Shield Wall: +1 per adjacent hex with friendly infantry, max +2
-	if (leadDefender.type === "infantry") {
+	if (isInfantryLine(leadDefender.type)) {
 		const adjacentIds = neighborsOf(leadDefender.position);
 		let shieldWallBonus = 0;
 		for (const adjId of adjacentIds) {
@@ -1295,7 +1536,7 @@ function computeCombat(
 				// Count this hex if it has any friendly infantry
 				const hasInfantry = adjHex.unitIds.some((uid) => {
 					const u = getUnit(state, uid);
-					return u && u.owner === leadDefender.owner && u.type === "infantry";
+					return u && u.owner === leadDefender.owner && isInfantryLine(u.type);
 				});
 				if (hasInfantry) shieldWallBonus++;
 			}
@@ -1318,7 +1559,7 @@ function computeCombat(
 	}
 
 	// Archer melee vulnerability: -1 DEF at distance 1 (floor 0)
-	if (leadDefender.type === "archer" && dist === 1) {
+	if (isArcherLine(leadDefender.type) && dist === 1) {
 		defensePower = Math.max(
 			0,
 			defensePower - config.abilities.archerMeleeVulnerability,
@@ -1358,10 +1599,8 @@ function computeCombat(
 
 function computeImmediateTerminal(state: MatchState): TerminalState {
 	// Stronghold capture: ONE stronghold is enough to win
-	const [bStronghold1, bStronghold2] = STRONGHOLD_HEXES.B;
-	const bS1 = getHex(state, bStronghold1);
-	const bS2 = getHex(state, bStronghold2);
-	if (bS1?.controlledBy === "A" || bS2?.controlledBy === "A") {
+	const bStrongholds = strongholdHexesForState(state, "B");
+	if (bStrongholds.some((h) => getHex(state, h)?.controlledBy === "A")) {
 		return {
 			ended: true,
 			winner: state.players.A.id,
@@ -1369,10 +1608,8 @@ function computeImmediateTerminal(state: MatchState): TerminalState {
 		};
 	}
 
-	const [aStronghold1, aStronghold2] = STRONGHOLD_HEXES.A;
-	const aS1 = getHex(state, aStronghold1);
-	const aS2 = getHex(state, aStronghold2);
-	if (aS1?.controlledBy === "B" || aS2?.controlledBy === "B") {
+	const aStrongholds = strongholdHexesForState(state, "A");
+	if (aStrongholds.some((h) => getHex(state, h)?.controlledBy === "B")) {
 		return {
 			ended: true,
 			winner: state.players.B.id,
@@ -1537,27 +1774,32 @@ export function createInitialState(
 		owner: PlayerSide;
 		position: HexId;
 	}> = [
-		{ id: "A-1", type: "infantry", owner: "A", position: "B2" },
-		{ id: "A-2", type: "infantry", owner: "A", position: "H2" },
-		{ id: "A-3", type: "infantry", owner: "A", position: "G2" },
-		{ id: "A-4", type: "cavalry", owner: "A", position: "B3" },
-		{ id: "A-5", type: "cavalry", owner: "A", position: "H3" },
-		{ id: "A-6", type: "archer", owner: "A", position: "C2" },
-		{ id: "B-1", type: "infantry", owner: "B", position: "B20" },
-		{ id: "B-2", type: "infantry", owner: "B", position: "H20" },
-		{ id: "B-3", type: "infantry", owner: "B", position: "G20" },
-		{ id: "B-4", type: "cavalry", owner: "B", position: "B19" },
-		{ id: "B-5", type: "cavalry", owner: "B", position: "H19" },
-		{ id: "B-6", type: "archer", owner: "B", position: "C20" },
+		{ id: "A-1", type: "infantry", owner: "A", position: "B2" as HexId },
+		{ id: "A-2", type: "infantry", owner: "A", position: "H2" as HexId },
+		{ id: "A-3", type: "infantry", owner: "A", position: "G2" as HexId },
+		{ id: "A-4", type: "cavalry", owner: "A", position: "B3" as HexId },
+		{ id: "A-5", type: "cavalry", owner: "A", position: "H3" as HexId },
+		{ id: "A-6", type: "archer", owner: "A", position: "C2" as HexId },
+		{ id: "B-1", type: "infantry", owner: "B", position: "B20" as HexId },
+		{ id: "B-2", type: "infantry", owner: "B", position: "H20" as HexId },
+		{ id: "B-3", type: "infantry", owner: "B", position: "G20" as HexId },
+		{ id: "B-4", type: "cavalry", owner: "B", position: "B19" as HexId },
+		{ id: "B-5", type: "cavalry", owner: "B", position: "H19" as HexId },
+		{ id: "B-6", type: "archer", owner: "B", position: "C20" as HexId },
 	];
 
 	for (const def of startingUnits) {
+		const mappedPosition = mapCanonicalHexToBoardHex(
+			def.position,
+			config.boardColumns,
+		);
+		if (!mappedPosition) continue;
 		const hp = config.unitStats[def.type].hp;
 		const unit: Unit = {
 			id: def.id,
 			type: def.type,
 			owner: def.owner,
-			position: def.position,
+			position: mappedPosition,
 			hp,
 			maxHp: hp,
 			isFortified: false,
@@ -1607,7 +1849,7 @@ export function listLegalMoves(state: MatchState): Move[] {
 
 	if (canAct) {
 		// Recruit at own strongholds (must be empty)
-		const strongholds = STRONGHOLD_HEXES[side];
+		const strongholds = strongholdHexesForState(state, side);
 		for (const shId of strongholds) {
 			const hex = getHex(state, shId);
 			if (hex && hex.controlledBy === side && hex.unitIds.length === 0) {
@@ -1615,7 +1857,7 @@ export function listLegalMoves(state: MatchState): Move[] {
 					"infantry",
 					"cavalry",
 					"archer",
-				] as UnitType[]) {
+				] as BaseUnitType[]) {
 					const cost = config.unitStats[unitType].cost;
 					if (player.gold >= cost) {
 						moves.push({ action: "recruit", unitType, at: shId });
@@ -1699,8 +1941,20 @@ export function listLegalMoves(state: MatchState): Move[] {
 			if (!unit.canActThisTurn) continue;
 			if (unit.movedThisTurn || unit.attackedThisTurn) continue;
 			if (unit.isFortified) continue;
-			if (player.wood < 1) continue;
+			if (player.wood < FORTIFY_WOOD_COST) continue;
 			moves.push({ action: "fortify", unitId: unit.id });
+		}
+
+		// Upgrade (T1 -> T2)
+		for (const unit of sortUnits(player.units)) {
+			if (!unit.canActThisTurn) continue;
+			if (unit.movedThisTurn || unit.attackedThisTurn) continue;
+			if (!isBaseUnitType(unit.type)) continue;
+			const upgradeCost = config.upgradeCosts[unit.type];
+			if (player.gold < upgradeCost.gold || player.wood < upgradeCost.wood) {
+				continue;
+			}
+			moves.push({ action: "upgrade", unitId: unit.id });
 		}
 	}
 
@@ -1984,11 +2238,58 @@ export function validateMove(
 					error: "Unit is already fortified.",
 				};
 			}
-			if (player.wood < 1) {
+			if (player.wood < FORTIFY_WOOD_COST) {
 				return {
 					ok: false,
 					reason: "illegal_move",
 					error: "Not enough wood.",
+				};
+			}
+			return { ok: true, move: m };
+		}
+		case "upgrade": {
+			const unit = getUnit(state, m.unitId);
+			if (!unit || unit.owner !== side) {
+				return {
+					ok: false,
+					reason: "illegal_move",
+					error: "Unit not owned by player.",
+				};
+			}
+			if (!unit.canActThisTurn) {
+				return {
+					ok: false,
+					reason: "illegal_move",
+					error: "Unit cannot act this turn.",
+				};
+			}
+			if (unit.movedThisTurn) {
+				return {
+					ok: false,
+					reason: "illegal_move",
+					error: "Unit has already moved.",
+				};
+			}
+			if (unit.attackedThisTurn) {
+				return {
+					ok: false,
+					reason: "illegal_move",
+					error: "Unit has already attacked.",
+				};
+			}
+			if (!isBaseUnitType(unit.type)) {
+				return {
+					ok: false,
+					reason: "illegal_move",
+					error: "Unit is already upgraded.",
+				};
+			}
+			const upgradeCost = config.upgradeCosts[unit.type];
+			if (player.gold < upgradeCost.gold || player.wood < upgradeCost.wood) {
+				return {
+					ok: false,
+					reason: "illegal_move",
+					error: "Not enough resources.",
 				};
 			}
 			return { ok: true, move: m };
@@ -2087,9 +2388,9 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 			}
 			const from = unit.position;
 
-			// Check cavalry charge eligibility before moving
+			// Check cavalry-line charge eligibility before moving
 			let chargeEligible = false;
-			if (unit.type === "cavalry" && dist >= 2) {
+			if (isCavalryLine(unit.type) && dist >= 2) {
 				chargeEligible = hasForestFreePath(
 					from,
 					m.to,
@@ -2204,7 +2505,7 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 			if (!unit) {
 				return failMove(nextState, m, "invalid_move", "Unit not found.");
 			}
-			player.wood -= 1;
+			player.wood -= FORTIFY_WOOD_COST;
 			// Fortify all units on the hex
 			const stackUnits = getUnitsOnHex(nextState, unit.position);
 			for (const su of stackUnits) {
@@ -2216,6 +2517,43 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 				turn: nextState.turn,
 				player: side,
 				unitId: unit.id,
+				at: unit.position,
+			});
+			break;
+		}
+		case "upgrade": {
+			const unit = getUnit(nextState, m.unitId);
+			if (!unit) {
+				return failMove(nextState, m, "invalid_move", "Unit not found.");
+			}
+			if (!isBaseUnitType(unit.type)) {
+				return failMove(
+					nextState,
+					m,
+					"invalid_move",
+					"Unit is already upgraded.",
+				);
+			}
+			const fromType = unit.type;
+			const toType = UPGRADE_PATH[fromType];
+			const upgradeCost = config.upgradeCosts[fromType];
+			player.gold -= upgradeCost.gold;
+			player.wood -= upgradeCost.wood;
+			const nextStats = config.unitStats[toType];
+			unit.type = toType;
+			unit.maxHp = nextStats.hp;
+			unit.hp = Math.min(nextStats.hp, unit.hp + 1);
+			unit.canActThisTurn = false;
+			unit.movedThisTurn = false;
+			unit.attackedThisTurn = false;
+			unit.chargeEligible = undefined;
+			engineEvents.push({
+				type: "upgrade",
+				turn: nextState.turn,
+				player: side,
+				unitId: unit.id,
+				fromType,
+				toType,
 				at: unit.position,
 			});
 			break;
@@ -2328,10 +2666,11 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 
 export function renderAscii(state: MatchState): string {
 	const lines: string[] = [];
+	const cols = currentCols();
 
 	// Header row with column numbers
 	const headerCells: string[] = [];
-	for (let col = 0; col < COLS; col++) {
+	for (let col = 0; col < cols; col++) {
 		headerCells.push(String(col + 1).padStart(4));
 	}
 	lines.push(`    ${headerCells.join("")}`);
@@ -2339,7 +2678,7 @@ export function renderAscii(state: MatchState): string {
 	for (let row = 0; row < ROWS; row++) {
 		const rowLabel = ROW_LETTERS[row]!;
 		const cells: string[] = [];
-		for (let col = 0; col < COLS; col++) {
+		for (let col = 0; col < cols; col++) {
 			const id = toHexId(row, col);
 			const hex = getHex(state, id);
 			if (!hex) {
@@ -2351,11 +2690,7 @@ export function renderAscii(state: MatchState): string {
 			const owner = unit?.owner ?? hex.controlledBy ?? ".";
 			const stackCount = hex.unitIds.length;
 			const content = unit
-				? (unit.type === "infantry"
-						? "i"
-						: unit.type === "cavalry"
-							? "c"
-							: "a") + (stackCount > 1 ? String(stackCount) : "")
+				? unitTypeChar(unit.type) + (stackCount > 1 ? String(stackCount) : "")
 				: terrainChar(hex.type);
 			cells.push(` ${owner}${content.padEnd(2)} `.slice(0, 4));
 		}
@@ -2363,11 +2698,30 @@ export function renderAscii(state: MatchState): string {
 	}
 
 	lines.push("");
-	lines.push("Legend: A/B=control, i=infantry, c=cavalry, a=archer");
+	lines.push(
+		"Legend: A/B=control, i=infantry, c=cavalry, a=archer, s=swordsman, k=knight, x=crossbow",
+	);
 	lines.push(
 		"  S=stronghold, G=gold, L=lumber, C=crown, H=high_ground, F=forest, h=hills, D=deploy",
 	);
 	return lines.join("\n");
+}
+
+function unitTypeChar(type: UnitType): string {
+	switch (type) {
+		case "infantry":
+			return "i";
+		case "cavalry":
+			return "c";
+		case "archer":
+			return "a";
+		case "swordsman":
+			return "s";
+		case "knight":
+			return "k";
+		case "crossbow":
+			return "x";
+	}
 }
 
 function terrainChar(type: HexType): string {

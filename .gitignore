@@ -52,6 +52,7 @@ coverage
 .cache
 tmp
 temp
+apps/sim/out/
 
 # Local notes/scratch
 CLAUDE.md
@@ -59,3 +60,12 @@ FUTURE_FIXES.md
 /index.ts
 project docs/*
 !project docs/war-of-attrition-rules.md
+
+docs/plans/
+
+# Test artifacts
+**/diagnostics/
+**/results_low_quality/
+**/results/
+**/test-artifacts/
+apps/web/public/dev-replay/

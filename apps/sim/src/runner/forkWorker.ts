@@ -3,13 +3,20 @@
  * Runs as a child process via child_process.fork() — inherits tsx loader
  * from the parent's process.execArgv automatically.
  */
+
+import type {
+	HarnessMode,
+	InvalidPolicy,
+	MoveValidationMode,
+	ScenarioName,
+} from "../boardgameio/types";
 import { makeAggressiveBot } from "../bots/aggressiveBot";
 import { makeGreedyBot } from "../bots/greedyBot";
 import type { MockLlmConfig } from "../bots/mockLlmBot";
 import { makeMockLlmBot } from "../bots/mockLlmBot";
 import { makeRandomLegalBot } from "../bots/randomBot";
 import { playMatch } from "../match";
-import type { Bot, MatchResult } from "../types";
+import type { Bot, EngineConfigInput, MatchResult } from "../types";
 
 export interface BotConfig {
 	id: string;
@@ -24,6 +31,17 @@ interface BatchRequest {
 	seeds: number[];
 	maxTurns: number;
 	botConfigs: BotConfig[];
+	engineConfig?: EngineConfigInput;
+	harnessOptions?: {
+		harness?: HarnessMode;
+		scenario?: ScenarioName;
+		invalidPolicy?: InvalidPolicy;
+		moveValidationMode?: MoveValidationMode;
+		strict?: boolean;
+		artifactDir?: string;
+		storeFullPrompt?: boolean;
+		storeFullOutput?: boolean;
+	};
 }
 
 interface BatchResponse {
@@ -73,6 +91,15 @@ process.on("message", async (msg: WorkerMessage) => {
 					verbose: false,
 					record: false,
 					autofixIllegal: true,
+					engineConfig: msg.engineConfig,
+					scenario: msg.harnessOptions?.scenario,
+					harness: msg.harnessOptions?.harness,
+					invalidPolicy: msg.harnessOptions?.invalidPolicy,
+					moveValidationMode: msg.harnessOptions?.moveValidationMode,
+					strict: msg.harnessOptions?.strict,
+					artifactDir: msg.harnessOptions?.artifactDir,
+					storeFullPrompt: msg.harnessOptions?.storeFullPrompt,
+					storeFullOutput: msg.harnessOptions?.storeFullOutput,
 				});
 				results.push(result);
 			}

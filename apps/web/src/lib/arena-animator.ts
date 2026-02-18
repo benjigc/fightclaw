@@ -1,6 +1,12 @@
-import type { EngineEvent, MatchState, Move } from "@fightclaw/engine";
+import {
+	type EngineEvent,
+	type MatchState,
+	type Move,
+	parseHexId,
+} from "@fightclaw/engine";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UnitAnimState } from "@/components/arena/unit-token";
+import { HEX_RADIUS, hexIdToPixel } from "@/lib/hex-geo";
 
 // Re-export unchanged envelope type for consumers
 export type EngineEventsEnvelopeV1 = {
@@ -24,8 +30,16 @@ export type ArenaEffect = {
 		| "attack-target"
 		| "recruit"
 		| "fortify"
-		| "pass";
+		| "pass"
+		| "attack-tracer";
 	hexId: string;
+	targetHexId?: string;
+};
+
+export type DamageNumberEntry = {
+	id: string;
+	hexId: string;
+	value: number;
 };
 
 export type HudFx = {
@@ -65,6 +79,26 @@ const inferSide = (events: EngineEvent[]): "A" | "B" | null => {
 const strongholdForSide = (side: "A" | "B"): string =>
 	side === "A" ? "B2" : "B20";
 
+/** Compute odd-r hex distance between two hex IDs. */
+function hexDist(a: string, b: string): number {
+	const pa = parseHexId(a);
+	const pb = parseHexId(b);
+	// Convert odd-r offset to cube coords
+	const toCube = (row: number, col: number) => {
+		const x = col - (row - (row & 1)) / 2;
+		const z = row;
+		const y = -x - z;
+		return { x, y, z };
+	};
+	const ca = toCube(pa.row, pa.col);
+	const cb = toCube(pb.row, pb.col);
+	return Math.max(
+		Math.abs(ca.x - cb.x),
+		Math.abs(ca.y - cb.y),
+		Math.abs(ca.z - cb.z),
+	);
+}
+
 let effectCounter = 0;
 function nextEffectId(): string {
 	return `fx-${++effectCounter}`;
@@ -82,6 +116,10 @@ export function useArenaAnimator(options?: {
 	>(new Map());
 	const [dyingUnitIds, setDyingUnitIds] = useState<Set<string>>(new Set());
 	const [hudFx, setHudFx] = useState<HudFx>({ passPulse: false });
+	const [damageNumbers, setDamageNumbers] = useState<DamageNumberEntry[]>([]);
+	const [lungeTargets, setLungeTargets] = useState<
+		Map<string, { x: number; y: number }>
+	>(new Map());
 	const [isAnimating, setIsAnimating] = useState(false);
 
 	const queueRef = useRef<QueuedItem[]>([]);
@@ -172,7 +210,7 @@ export function useArenaAnimator(options?: {
 						{ id: nextEffectId(), type: "move-from", hexId: ev.from },
 						{ id: nextEffectId(), type: "move-to", hexId: ev.to },
 					]);
-					await delay(scale(260));
+					await delay(scale(350));
 					if (runTokenRef.current !== token) return;
 
 					clearUnitAnim(ev.unitId);
@@ -186,7 +224,14 @@ export function useArenaAnimator(options?: {
 					| undefined;
 				if (ev && isValidHex(ev.attackerFrom) && isValidHex(ev.targetHex)) {
 					setUnitAnim(ev.attackerId, "attacking");
-					setEffects([
+
+					// Compute lunge target pixel coords
+					const targetPixel = hexIdToPixel(ev.targetHex, HEX_RADIUS);
+					setLungeTargets(
+						new Map([[ev.attackerId, { x: targetPixel.x, y: targetPixel.y }]]),
+					);
+
+					const fxList: ArenaEffect[] = [
 						{
 							id: nextEffectId(),
 							type: "attack-source",
@@ -197,7 +242,29 @@ export function useArenaAnimator(options?: {
 							type: "attack-target",
 							hexId: ev.targetHex,
 						},
-					]);
+					];
+
+					// Ranged attack tracer (distance > 1)
+					const dist = hexDist(ev.attackerFrom, ev.targetHex);
+					if (dist > 1) {
+						fxList.push({
+							id: nextEffectId(),
+							type: "attack-tracer",
+							hexId: ev.attackerFrom,
+							targetHexId: ev.targetHex,
+						});
+					}
+
+					setEffects(fxList);
+
+					// Emit damage number
+					const dmg = ev.outcome.damageDealt;
+					if (dmg > 0) {
+						setDamageNumbers([
+							{ id: nextEffectId(), hexId: ev.targetHex, value: dmg },
+						]);
+					}
+
 					await delay(scale(170));
 					if (runTokenRef.current !== token) return;
 
@@ -211,6 +278,8 @@ export function useArenaAnimator(options?: {
 					}
 					setDyingUnitIds(new Set());
 					setEffects([]);
+					setDamageNumbers([]);
+					setLungeTargets(new Map());
 					await delay(scale(120));
 					if (runTokenRef.current !== token) return;
 				}
@@ -315,6 +384,8 @@ export function useArenaAnimator(options?: {
 		setUnitAnimStates(new Map());
 		setDyingUnitIds(new Set());
 		setHudFx({ passPulse: false });
+		setDamageNumbers([]);
+		setLungeTargets(new Map());
 		setIsAnimating(false);
 		clearAllTimeouts();
 	}, [clearAllTimeouts]);
@@ -331,11 +402,23 @@ export function useArenaAnimator(options?: {
 			unitAnimStates,
 			dyingUnitIds,
 			hudFx,
+			damageNumbers,
+			lungeTargets,
 			isAnimating,
 			enqueue,
 			reset,
 		}),
-		[effects, unitAnimStates, dyingUnitIds, hudFx, isAnimating, enqueue, reset],
+		[
+			effects,
+			unitAnimStates,
+			dyingUnitIds,
+			hudFx,
+			damageNumbers,
+			lungeTargets,
+			isAnimating,
+			enqueue,
+			reset,
+		],
 	);
 
 	return api;

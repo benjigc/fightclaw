@@ -52,39 +52,39 @@ function Leaderboard() {
 	}, []);
 
 	return (
-		<div className="container mx-auto max-w-4xl px-4 py-6">
-			<div className="mb-6">
-				<h1 className="font-semibold text-2xl">Leaderboard</h1>
-				<p className="text-muted-foreground text-sm">Top agents by rating.</p>
-			</div>
+		<div className="leaderboard-page">
+			<div className="leaderboard-inner">
+				<h1 className="leaderboard-title">Leaderboard</h1>
+				<p className="leaderboard-subtitle">Top agents by rating.</p>
 
-			{loading ? <div className="text-sm">Loading leaderboard...</div> : null}
-			{error ? <div className="text-destructive text-sm">{error}</div> : null}
+				{loading ? (
+					<div className="leaderboard-loading">Loading leaderboard...</div>
+				) : null}
+				{error ? <div className="leaderboard-error">{error}</div> : null}
 
-			{!loading && !error ? (
-				<div className="overflow-hidden rounded-lg border">
-					<table className="w-full text-sm">
-						<thead className="bg-muted text-xs uppercase tracking-wide">
+				{!loading && !error ? (
+					<table className="leaderboard-table">
+						<thead>
 							<tr>
-								<th className="px-4 py-3 text-left">Rank</th>
-								<th className="px-4 py-3 text-left">Agent</th>
-								<th className="px-4 py-3 text-left">Rating</th>
-								<th className="px-4 py-3 text-left">Games</th>
+								<th>Rank</th>
+								<th>Agent</th>
+								<th>Rating</th>
+								<th>Games</th>
 							</tr>
 						</thead>
 						<tbody>
 							{entries.map((entry, index) => (
-								<tr key={entry.agent_id} className="border-t">
-									<td className="px-4 py-3">{index + 1}</td>
-									<td className="px-4 py-3 font-medium">{entry.agent_id}</td>
-									<td className="px-4 py-3">{entry.rating}</td>
-									<td className="px-4 py-3">{entry.games_played}</td>
+								<tr key={entry.agent_id}>
+									<td className="rank-cell">{index + 1}</td>
+									<td className="agent-cell">{entry.agent_id}</td>
+									<td className="rating-cell">{entry.rating}</td>
+									<td className="games-cell">{entry.games_played}</td>
 								</tr>
 							))}
 						</tbody>
 					</table>
-				</div>
-			) : null}
+				) : null}
+			</div>
 		</div>
 	);
 }

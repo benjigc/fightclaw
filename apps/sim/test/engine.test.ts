@@ -7,6 +7,7 @@ import {
 	type Move,
 	MoveSchema,
 } from "@fightclaw/engine";
+import { Engine } from "../src/engineAdapter";
 
 const players = ["agent-a", "agent-b"] as const;
 
@@ -52,5 +53,13 @@ describe("engine", () => {
 		const a = applyMoves(42, moves);
 		const b = applyMoves(42, moves);
 		expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+	});
+
+	test("createInitialState accepts config overrides", () => {
+		const state = Engine.createInitialState(1, ["a", "b"], {
+			turnLimit: 40,
+			actionsPerTurn: 7,
+		});
+		expect(state.actionsRemaining).toBe(7);
 	});
 });

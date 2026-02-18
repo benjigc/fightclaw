@@ -1,5 +1,11 @@
+import type {
+	HarnessMode,
+	InvalidPolicy,
+	MoveValidationMode,
+	ScenarioName,
+} from "./boardgameio/types";
 import { playMatch } from "./match";
-import type { Bot } from "./types";
+import type { Bot, EngineConfigInput } from "./types";
 
 export async function runTournament(opts: {
 	games: number;
@@ -7,6 +13,15 @@ export async function runTournament(opts: {
 	maxTurns: number;
 	players: [Bot, Bot];
 	autofixIllegal?: boolean;
+	engineConfig?: EngineConfigInput;
+	scenario?: ScenarioName;
+	harness?: HarnessMode;
+	invalidPolicy?: InvalidPolicy;
+	moveValidationMode?: MoveValidationMode;
+	strict?: boolean;
+	artifactDir?: string;
+	storeFullPrompt?: boolean;
+	storeFullOutput?: boolean;
 }) {
 	const results = [];
 	for (let i = 0; i < opts.games; i++) {
@@ -17,6 +32,15 @@ export async function runTournament(opts: {
 			maxTurns: opts.maxTurns,
 			verbose: false,
 			autofixIllegal: opts.autofixIllegal,
+			engineConfig: opts.engineConfig,
+			scenario: opts.scenario,
+			harness: opts.harness,
+			invalidPolicy: opts.invalidPolicy,
+			moveValidationMode: opts.moveValidationMode,
+			strict: opts.strict,
+			artifactDir: opts.artifactDir,
+			storeFullPrompt: opts.storeFullPrompt,
+			storeFullOutput: opts.storeFullOutput,
 		});
 		results.push(r);
 	}

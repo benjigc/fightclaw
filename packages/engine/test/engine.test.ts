@@ -431,7 +431,7 @@ describe("v2 engine - War of Attrition", () => {
 
 	// ---- Fortify ----
 
-	test("fortify costs 1 wood and grants fortified status", () => {
+	test("fortify costs 2 wood and grants fortified status", () => {
 		let state = createInitialState(0, undefined, [...players]);
 		state = structuredClone(state);
 		state.players.A.wood = 3;
@@ -443,7 +443,7 @@ describe("v2 engine - War of Attrition", () => {
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 
-		expect(result.state.players.A.wood).toBe(2);
+		expect(result.state.players.A.wood).toBe(1);
 		const unit = result.state.players.A.units.find((u) => u.id === "A-1");
 		expect(unit?.isFortified).toBe(true);
 		expect(unit?.canActThisTurn).toBe(false);
@@ -503,7 +503,7 @@ describe("v2 engine - War of Attrition", () => {
 	test("HP-based combat: attacker advantage deals damage without dying", () => {
 		let state = createInitialState(0, undefined, [...players]);
 		state = clearUnits(state);
-		// Cavalry ATK 4 + attacker bonus 1 = 5 vs infantry DEF 4 + 0 terrain (plains) = 4
+		// Cavalry ATK 4 + attacker bonus 2 = 6 vs infantry DEF 4 + 0 terrain (plains) = 4
 		// ATK > DEF → damage to defenders = 1, damage to attackers = 0
 		state = addUnitToState(state, "A-1", "cavalry", "A", "E5");
 		state = addUnitToState(state, "B-1", "infantry", "B", "E6");
@@ -520,9 +520,9 @@ describe("v2 engine - War of Attrition", () => {
 			| AttackEvent
 			| undefined;
 		expect(atkEvent).toBeTruthy();
-		expect(atkEvent!.attackPower).toBe(5); // 4 base + 1 attacker bonus
+		expect(atkEvent!.attackPower).toBe(6); // 4 base + 2 attacker bonus
 		expect(atkEvent!.defensePower).toBe(4); // 4 base + 0 terrain
-		expect(atkEvent!.outcome.damageDealt).toBe(1);
+		expect(atkEvent!.outcome.damageDealt).toBe(2);
 		expect(atkEvent!.outcome.damageTaken).toBe(0);
 		// Infantry has 3 HP, takes 1 → survives
 		expect(atkEvent!.outcome.defenderSurvivors.length).toBe(1);
@@ -591,8 +591,8 @@ describe("v2 engine - War of Attrition", () => {
 			| AttackEvent
 			| undefined;
 		expect(atkEvent).toBeTruthy();
-		// ATK = 2 + 1 = 3, DEF = 4 + 1 (hills) = 5
-		expect(atkEvent!.attackPower).toBe(3);
+		// ATK = 2 + 2 = 4, DEF = 4 + 1 (hills) = 5
+		expect(atkEvent!.attackPower).toBe(4);
 		expect(atkEvent!.defensePower).toBe(5);
 		// ATK < DEF: minimum 1 damage to defender, 1 counterattack to attacker
 		expect(atkEvent!.outcome.damageDealt).toBe(1);
@@ -603,7 +603,7 @@ describe("v2 engine - War of Attrition", () => {
 		let state = createInitialState(0, undefined, [...players]);
 		state = clearUnits(state);
 		// Need ATK == DEF.
-		// Infantry ATK 2 + 1 attacker = 3, cavalry DEF 2 + 1 (hills) = 3
+		// Infantry ATK 2 + 2 attacker = 4, cavalry DEF 2 + 1 (hills) = 3
 		state = addUnitToState(state, "A-1", "infantry", "A", "E6");
 		expect(state.board[hexIndex("E7")]?.type).toBe("hills");
 		state = addUnitToState(state, "B-1", "cavalry", "B", "E7");
@@ -619,7 +619,7 @@ describe("v2 engine - War of Attrition", () => {
 		const atkEvent = result.engineEvents.find((e) => e.type === "attack") as
 			| AttackEvent
 			| undefined;
-		expect(atkEvent!.attackPower).toBe(3);
+		expect(atkEvent!.attackPower).toBe(4);
 		expect(atkEvent!.defensePower).toBe(3);
 		expect(atkEvent!.outcome.damageDealt).toBe(1);
 		expect(atkEvent!.outcome.damageTaken).toBe(0);
@@ -705,8 +705,8 @@ describe("v2 engine - War of Attrition", () => {
 			| AttackEvent
 			| undefined;
 		expect(attackEvent).toBeTruthy();
-		// Cavalry base ATK 4 + attacker bonus 1 + charge 2 = 7
-		expect(attackEvent?.attackPower).toBe(7);
+		// Cavalry base ATK 4 + attacker bonus 2 + charge 2 = 8
+		expect(attackEvent?.attackPower).toBe(8);
 		expect(attackEvent?.abilities).toContain("cavalry_charge");
 	});
 
@@ -764,14 +764,14 @@ describe("v2 engine - War of Attrition", () => {
 			| AttackEvent
 			| undefined;
 		expect(attackEvent).toBeTruthy();
-		// base 4 + attacker bonus 1 + stack bonus 1 + charge 2
-		expect(attackEvent?.attackPower).toBe(8);
+		// base 4 + attacker bonus 2 + stack bonus 1 + charge 2
+		expect(attackEvent?.attackPower).toBe(9);
 		expect(attackEvent?.abilities).toContain("cavalry_charge");
 	});
 
 	// ---- Shield Wall ----
 
-	test("shield wall +1 per adjacent hex with friendly infantry, max +2", () => {
+	test("shield wall +1 per adjacent hex with friendly infantry, max +1", () => {
 		let state = createInitialState(0, undefined, [...players]);
 		state = clearUnits(state);
 		state = addUnitToState(state, "B-1", "infantry", "B", "D10");
@@ -811,12 +811,12 @@ describe("v2 engine - War of Attrition", () => {
 			| AttackEvent
 			| undefined;
 		expect(atkEvent).toBeTruthy();
-		// Infantry base DEF 4 + terrain 0 (plains) + shield wall +2 = 6
-		expect(atkEvent?.defensePower).toBe(6);
-		expect(atkEvent?.abilities).toContain("shield_wall_+2");
+		// Infantry base DEF 4 + terrain 0 (plains) + shield wall +1 = 5
+		expect(atkEvent?.defensePower).toBe(5);
+		expect(atkEvent?.abilities).toContain("shield_wall_+1");
 	});
 
-	test("shield wall caps at +2 even with 3+ adjacent infantry hexes", () => {
+	test("shield wall caps at +1 even with 3+ adjacent infantry hexes", () => {
 		let state = createInitialState(0, undefined, [...players]);
 		state = clearUnits(state);
 		state = addUnitToState(state, "B-1", "infantry", "B", "D10");
@@ -852,8 +852,8 @@ describe("v2 engine - War of Attrition", () => {
 		const atkEvent = result.engineEvents.find((e) => e.type === "attack") as
 			| AttackEvent
 			| undefined;
-		// Still capped at +2
-		expect(atkEvent?.defensePower).toBe(6);
+		// Still capped at +1
+		expect(atkEvent?.defensePower).toBe(5);
 	});
 
 	// ---- Archer melee vulnerability ----
@@ -1239,6 +1239,81 @@ describe("v2 engine - War of Attrition", () => {
 		expect(atkEvent?.defensePower).toBe(5);
 	});
 
+	test("fortify bonus is configurable and stacks with terrain fortify bonuses", () => {
+		let state = createInitialState(
+			0,
+			{
+				abilities: { fortifyBonus: 2 },
+				fortifyDefenseBonusByTerrain: { hills: 2 },
+			},
+			[...players],
+		);
+		state = clearUnits(state);
+		state = addUnitToState(state, "A-1", "cavalry", "A", "E6");
+		state = addUnitToState(state, "B-1", "infantry", "B", "E7", {
+			isFortified: true,
+		});
+
+		const result = applyMove(state, {
+			action: "attack",
+			unitId: "A-1",
+			target: "E7",
+		});
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const atkEvent = result.engineEvents.find((e) => e.type === "attack") as
+			| AttackEvent
+			| undefined;
+		expect(atkEvent).toBeTruthy();
+		expect(atkEvent?.defensePower).toBe(8);
+		expect(atkEvent?.abilities).toContain("fortify");
+	});
+
+	test("controlling multiple economy nodes grants long-horizon macro income", () => {
+		let state = createInitialState(0, undefined, [...players]);
+		state = structuredClone(state);
+		const b9Idx = hexIndex("B9");
+		const c8Idx = hexIndex("C8");
+		state.board[b9Idx] = { ...state.board[b9Idx]!, controlledBy: "A" };
+		state.board[c8Idx] = { ...state.board[c8Idx]!, controlledBy: "A" };
+
+		const startingGold = state.players.A.gold;
+		const startingWood = state.players.A.wood;
+
+		let result = applyMove(state, { action: "end_turn" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		result = applyMove(result.state, { action: "end_turn" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		expect(result.state.players.A.gold).toBe(startingGold + 8);
+		expect(result.state.players.A.wood).toBe(startingWood + 3);
+	});
+
+	test("comeback stipend applies when a player is behind on multiple axes", () => {
+		let state = createInitialState(0, undefined, [...players]);
+		state = structuredClone(state);
+		state.players.A.vp = 5;
+		state.players.B.vp = 0;
+
+		const removed = state.players.B.units.splice(0, 2);
+		for (const unit of removed) {
+			const idx = hexIndex(unit.position);
+			state.board[idx] = {
+				...state.board[idx]!,
+				unitIds: state.board[idx]!.unitIds.filter((id) => id !== unit.id),
+			};
+		}
+
+		const result = applyMove(state, { action: "end_turn" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.state.activePlayer).toBe("B");
+		expect(result.state.players.B.gold).toBe(21);
+		expect(result.state.players.B.wood).toBe(6);
+	});
+
 	// ---- Unit Stacking ----
 
 	test("same-type friendly units can stack on same hex", () => {
@@ -1295,8 +1370,8 @@ describe("v2 engine - War of Attrition", () => {
 		const atkEvent = result.engineEvents.find((e) => e.type === "attack") as
 			| AttackEvent
 			| undefined;
-		// 2 infantry: base ATK 2 + 1 attacker bonus + 1 stack bonus = 4
-		expect(atkEvent!.attackPower).toBe(4);
+		// 2 infantry: base ATK 2 + 2 attacker bonus + 1 stack bonus = 5
+		expect(atkEvent!.attackPower).toBe(5);
 		expect(atkEvent!.abilities).toContain("stack_atk_+1");
 	});
 
@@ -1333,6 +1408,63 @@ describe("v2 engine - War of Attrition", () => {
 		const result = applyMove(state, {
 			action: "recruit",
 			unitType: "infantry",
+			at: "B2",
+		});
+		expect(result.ok).toBe(false);
+	});
+
+	test("listLegalMoves includes upgrade for eligible base units", () => {
+		const state = createInitialState(0, undefined, [...players]);
+		const legalMoves = listLegalMoves(state);
+		expect(
+			legalMoves.some((m) => m.action === "upgrade" && m.unitId === "A-1"),
+		).toBe(true);
+	});
+
+	test("upgrade converts base unit into tier 2 unit and spends resources", () => {
+		const state = createInitialState(0, undefined, [...players]);
+		const beforeGold = state.players.A.gold;
+		const beforeWood = state.players.A.wood;
+		const result = applyMove(state, { action: "upgrade", unitId: "A-1" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		const upgraded = result.state.players.A.units.find((u) => u.id === "A-1");
+		expect(upgraded?.type).toBe("swordsman");
+		expect(result.state.players.A.gold).toBe(
+			beforeGold - DEFAULT_CONFIG.upgradeCosts.infantry.gold,
+		);
+		expect(result.state.players.A.wood).toBe(
+			beforeWood - DEFAULT_CONFIG.upgradeCosts.infantry.wood,
+		);
+		expect(result.state.actionsRemaining).toBe(4);
+		const upgradeEvent = result.engineEvents.find((e) => e.type === "upgrade");
+		expect(upgradeEvent).toBeTruthy();
+	});
+
+	test("cannot upgrade a tier 2 unit again", () => {
+		let state = createInitialState(0, undefined, [...players]);
+		const first = applyMove(state, { action: "upgrade", unitId: "A-1" });
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+		state = first.state;
+		const second = applyMove(state, { action: "upgrade", unitId: "A-1" });
+		expect(second.ok).toBe(false);
+	});
+
+	test("recruit does not allow tier 2 unit types", () => {
+		let state = createInitialState(0, undefined, [...players]);
+		const moveOff = applyMove(state, {
+			action: "move",
+			unitId: "A-1",
+			to: "A1",
+		});
+		expect(moveOff.ok).toBe(true);
+		if (!moveOff.ok) return;
+		state = moveOff.state;
+		const result = applyMove(state, {
+			action: "recruit",
+			unitType: "swordsman" as never,
 			at: "B2",
 		});
 		expect(result.ok).toBe(false);

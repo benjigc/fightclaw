@@ -3,9 +3,26 @@ import { fork } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import type {
+	HarnessMode,
+	InvalidPolicy,
+	MoveValidationMode,
+	ScenarioName,
+} from "../boardgameio/types";
 import type { SimulationOptions, SimulationStats } from "../simulation/config";
-import type { Bot, MatchResult } from "../types";
+import type { Bot, EngineConfigInput, MatchResult } from "../types";
 import type { BotConfig } from "./forkWorker";
+
+interface HarnessRunOptions {
+	harness?: HarnessMode;
+	scenario?: ScenarioName;
+	invalidPolicy?: InvalidPolicy;
+	moveValidationMode?: MoveValidationMode;
+	strict?: boolean;
+	artifactDir?: string;
+	storeFullPrompt?: boolean;
+	storeFullOutput?: boolean;
+}
 
 interface Checkpoint {
 	completedSeeds: number[];
@@ -62,6 +79,7 @@ function createEmptyStats(): SimulationStats {
 function aggregateResults(
 	results: MatchResult[],
 	playerIds: string[],
+	botConfigs?: BotConfig[],
 ): SimulationStats {
 	const stats = createEmptyStats();
 	stats.totalGames = results.length;
@@ -130,6 +148,15 @@ function aggregateResults(
 			ci95Lower: Math.max(0, (center - spread) / denominator),
 			ci95Upper: Math.min(1, (center + spread) / denominator),
 		};
+	}
+
+	if (botConfigs && botConfigs.length > 0) {
+		for (const cfg of botConfigs) {
+			if (cfg.type !== "mockllm") continue;
+			const strategy = cfg.llmConfig?.strategy ?? "strategic";
+			stats.strategyDistribution[strategy] =
+				(stats.strategyDistribution[strategy] ?? 0) + 1;
+		}
 	}
 
 	return stats;
@@ -203,8 +230,10 @@ function botToConfig(bot: Bot): BotConfig {
 	// For mockllm bots, extract the strategy from the name (MockLLM_<strategy>)
 	const config: BotConfig = { id: String(bot.id), name: bot.name, type };
 	if (type === "mockllm") {
-		const strategyMatch = bot.name.match(/MockLLM_(\w+)/);
-		const strategy = strategyMatch?.[1] as
+		const strategyMatch =
+			bot.name.match(/MockLLM_(\w+)/) ??
+			bot.name.match(/strategy=(aggressive|defensive|random|strategic)/i);
+		const strategy = strategyMatch?.[1]?.toLowerCase() as
 			| "aggressive"
 			| "defensive"
 			| "random"
@@ -225,6 +254,8 @@ function runWorkerBatch(
 	seeds: number[],
 	maxTurns: number,
 	botConfigs: BotConfig[],
+	engineConfig?: EngineConfigInput,
+	harnessOptions?: HarnessRunOptions,
 ): Promise<MatchResult[]> {
 	return new Promise((resolve, reject) => {
 		const timeout = setTimeout(() => {
@@ -255,6 +286,8 @@ function runWorkerBatch(
 			seeds,
 			maxTurns,
 			botConfigs,
+			engineConfig,
+			harnessOptions,
 		});
 	});
 }
@@ -262,6 +295,8 @@ function runWorkerBatch(
 export async function runMassSimulation(
 	options: SimulationOptions,
 	players: [Bot, Bot],
+	engineConfig?: EngineConfigInput,
+	harnessOptions?: HarnessRunOptions,
 ): Promise<SimulationStats> {
 	const totalGames = options.games;
 	const playerIds = players.map((p) => String(p.id));
@@ -296,7 +331,7 @@ export async function runMassSimulation(
 
 	if (allSeeds.length === 0) {
 		console.log("All matches already completed. Loading results...");
-		const stats = aggregateResults(allResults, playerIds);
+		const stats = aggregateResults(allResults, playerIds, botConfigs);
 		writeSummary(options.outputDir, stats);
 		cleanupCheckpoint(options.outputDir);
 		return stats;
@@ -341,6 +376,15 @@ export async function runMassSimulation(
 					verbose: false,
 					record: false,
 					autofixIllegal: true,
+					engineConfig,
+					scenario: harnessOptions?.scenario,
+					harness: harnessOptions?.harness,
+					invalidPolicy: harnessOptions?.invalidPolicy,
+					moveValidationMode: harnessOptions?.moveValidationMode,
+					strict: harnessOptions?.strict,
+					artifactDir: harnessOptions?.artifactDir,
+					storeFullPrompt: harnessOptions?.storeFullPrompt,
+					storeFullOutput: harnessOptions?.storeFullOutput,
 				});
 				batchResults.push(result);
 				completedSeedSet.add(seed);
@@ -404,6 +448,8 @@ export async function runMassSimulation(
 								seeds,
 								options.maxTurns,
 								botConfigs,
+								engineConfig,
+								harnessOptions,
 							);
 
 							for (const result of results) {
@@ -457,7 +503,7 @@ export async function runMassSimulation(
 	process.off("SIGINT", saveAndExit);
 	process.off("SIGTERM", saveAndExit);
 
-	const stats = aggregateResults(allResults, playerIds);
+	const stats = aggregateResults(allResults, playerIds, botConfigs);
 	stats.totalGames = totalGames;
 
 	writeSummary(options.outputDir, stats);

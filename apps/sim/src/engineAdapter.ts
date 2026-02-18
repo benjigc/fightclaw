@@ -13,11 +13,15 @@ import {
 	listLegalMoves,
 	winner,
 } from "@fightclaw/engine";
-import type { AgentId, MatchState, Move } from "./types";
+import type { AgentId, EngineConfigInput, MatchState, Move } from "./types";
 
 export const Engine = {
-	createInitialState(seed: number, players: AgentId[]): MatchState {
-		return createInitialState(seed, undefined, players);
+	createInitialState(
+		seed: number,
+		players: AgentId[],
+		configInput?: EngineConfigInput,
+	): MatchState {
+		return createInitialState(seed, configInput, players);
 	},
 
 	currentPlayer(state: MatchState): AgentId {
