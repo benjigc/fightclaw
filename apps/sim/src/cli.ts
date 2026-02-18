@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import minimist from "minimist";
 import { replayBoardgameArtifact } from "./boardgameio/replay";
@@ -25,11 +25,26 @@ import type { Bot, EngineConfigInput } from "./types";
 type Args = ReturnType<typeof minimist>;
 
 type BotType = "random" | "greedy" | "aggressive" | "mockllm" | "llm";
+type StrategyName = "aggressive" | "defensive" | "random" | "strategic";
 
 function inferApiKeyForBaseUrl(
 	_baseUrl: string | undefined,
 ): string | undefined {
 	return process.env.LLM_API_KEY ?? process.env.OPENROUTER_API_KEY;
+}
+
+function strategyPromptForLlm(strategy?: string): string | undefined {
+	const normalized = (strategy ?? "").toLowerCase() as StrategyName | "";
+	switch (normalized) {
+		case "aggressive":
+			return "Aggressive timing push: prioritize legal attacks first, then advance toward enemy stronghold. Avoid recruit loops when attacks are legal.";
+		case "defensive":
+			return "Defensive macro: protect fragile units, trade safely, recruit when needed, but if attacks are legal do not skip all combat.";
+		case "strategic":
+			return "Strategic tempo: preserve material, take favorable attacks, contest terrain, and create a decisive midgame timing. Avoid move-only loops.";
+		default:
+			return undefined;
+	}
 }
 
 function makeBot(
@@ -71,7 +86,7 @@ function makeBot(
 				baseUrl: opts.baseUrl,
 				openRouterReferer: opts.openrouterReferrer,
 				openRouterTitle: opts.openrouterTitle,
-				systemPrompt: opts.prompt,
+				systemPrompt: opts.prompt ?? strategyPromptForLlm(opts.strategy),
 				delayMs: opts.llmDelayMs ?? 0,
 				parallelCalls: opts.llmParallelCalls,
 				timeoutMs: opts.llmTimeoutMs,
@@ -93,6 +108,377 @@ function makeBot(
 		default:
 			return makeRandomLegalBot(id);
 	}
+}
+
+type DashboardArtifactTurn = {
+	turnIndex?: number;
+	declaredPlan?: string;
+	powerSpikeTriggered?: boolean;
+	swingEvent?: string;
+	whyThisMove?: string;
+	commandAttempts?: Array<{
+		accepted?: boolean;
+		move?: {
+			action?: string;
+			reasoning?: string;
+			metadata?: {
+				whyThisMove?: string;
+				breakdown?: {
+					archetype?: string;
+				};
+			};
+		};
+	}>;
+	metricsV2?: {
+		resources?: {
+			ownVpDelta?: number;
+			enemyVpDelta?: number;
+		};
+	};
+};
+
+type DashboardArtifact = {
+	seed?: number;
+	result?: {
+		winner?: string | null;
+	};
+	turns?: DashboardArtifactTurn[];
+};
+
+function mean(values: number[]): number | null {
+	if (values.length === 0) return null;
+	return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function median(values: number[]): number | null {
+	if (values.length === 0) return null;
+	const sorted = [...values].sort((a, b) => a - b);
+	const mid = Math.floor(sorted.length / 2);
+	if (sorted.length % 2 === 1) {
+		return sorted[mid] ?? null;
+	}
+	const a = sorted[mid - 1];
+	const b = sorted[mid];
+	if (a === undefined || b === undefined) return null;
+	return (a + b) / 2;
+}
+
+function resolveArtifactFiles(inputDir: string): string[] {
+	const candidates = [path.join(inputDir, "artifacts"), inputDir];
+	for (const dir of candidates) {
+		if (!existsSync(dir)) continue;
+		const files = readdirSync(dir)
+			.filter((name) => name.endsWith(".json"))
+			.map((name) => path.join(dir, name));
+		if (files.length > 0) {
+			const hasArtifacts = files.some((file) => {
+				try {
+					const payload = JSON.parse(readFileSync(file, "utf-8")) as {
+						turns?: unknown;
+						artifactVersion?: unknown;
+					};
+					return Array.isArray(payload.turns) || payload.artifactVersion === 1;
+				} catch {
+					return false;
+				}
+			});
+			if (hasArtifacts) return files;
+		}
+	}
+	return [];
+}
+
+function toTurnNumber(turn: DashboardArtifactTurn, idx: number): number {
+	const value = turn.turnIndex;
+	return Number.isFinite(value) && typeof value === "number" ? value : idx + 1;
+}
+
+function normalizeOpeningChoice(input: string): string {
+	const clipped = input.trim().toLowerCase().slice(0, 48);
+	return clipped.length > 0 ? clipped : "unknown";
+}
+
+function detectFirstCommitmentTurn(
+	turns: DashboardArtifactTurn[],
+): number | null {
+	for (let idx = 0; idx < turns.length; idx++) {
+		const turn = turns[idx];
+		if (!turn) continue;
+		const accepted = (turn.commandAttempts ?? []).filter((a) => a.accepted);
+		const hasCommitment = accepted.some((attempt) => {
+			const action = attempt.move?.action;
+			return (
+				action === "attack" ||
+				action === "recruit" ||
+				action === "upgrade" ||
+				action === "fortify"
+			);
+		});
+		if (hasCommitment) {
+			return toTurnNumber(turn, idx);
+		}
+	}
+	return null;
+}
+
+function extractArchetypeTags(turn: DashboardArtifactTurn): string[] {
+	const tags: string[] = [];
+	const topLevelWhy = turn.whyThisMove;
+	if (typeof topLevelWhy === "string") {
+		const m = topLevelWhy.match(/archetype=([a-z_]+)/i);
+		if (m?.[1]) tags.push(m[1].toLowerCase());
+	}
+	for (const attempt of turn.commandAttempts ?? []) {
+		const fromBreakdown = attempt.move?.metadata?.breakdown?.archetype;
+		if (fromBreakdown) {
+			tags.push(fromBreakdown.toLowerCase());
+		}
+		const why = attempt.move?.metadata?.whyThisMove ?? attempt.move?.reasoning;
+		if (typeof why === "string") {
+			const m = why.match(/archetype=([a-z_]+)/i);
+			if (m?.[1]) tags.push(m[1].toLowerCase());
+		}
+	}
+	return tags;
+}
+
+function classifyMatchArchetype(turns: DashboardArtifactTurn[]): {
+	archetype: string;
+	confidence: number;
+} {
+	const directTags = turns.flatMap(extractArchetypeTags);
+	if (directTags.length > 0) {
+		const counts = new Map<string, number>();
+		for (const tag of directTags) {
+			counts.set(tag, (counts.get(tag) ?? 0) + 1);
+		}
+		let best = "unknown";
+		let bestCount = 0;
+		for (const [tag, count] of counts.entries()) {
+			if (count > bestCount) {
+				best = tag;
+				bestCount = count;
+			}
+		}
+		return {
+			archetype: best,
+			confidence: bestCount / Math.max(1, directTags.length),
+		};
+	}
+
+	let accepted = 0;
+	let attacks = 0;
+	let moves = 0;
+	let recruits = 0;
+	let upgrades = 0;
+	let fortifies = 0;
+	let openingAggro = 0;
+	for (let idx = 0; idx < turns.length; idx++) {
+		const turn = turns[idx];
+		if (!turn) continue;
+		const localAccepted = (turn.commandAttempts ?? []).filter(
+			(a) => a.accepted,
+		);
+		for (const attempt of localAccepted) {
+			accepted++;
+			const action = attempt.move?.action;
+			if (action === "attack") {
+				attacks++;
+				if (idx < 4) openingAggro++;
+			}
+			if (action === "move") moves++;
+			if (action === "recruit") recruits++;
+			if (action === "upgrade") upgrades++;
+			if (action === "fortify") fortifies++;
+		}
+	}
+
+	if (accepted === 0) {
+		return { archetype: "unknown", confidence: 0 };
+	}
+
+	const attackRate = attacks / accepted;
+	const moveRate = moves / accepted;
+	const econRate = (recruits + upgrades) / accepted;
+	const fortifyRate = fortifies / accepted;
+	const openingAggroRate = openingAggro / Math.max(1, attacks);
+
+	const scoreByArchetype = {
+		timing_push: attackRate * 1.7 + openingAggroRate * 0.8,
+		greedy_macro: econRate * 2.0 + (1 - attackRate) * 0.3,
+		turtle_boom: fortifyRate * 1.8 + econRate * 0.9 - attackRate * 0.4,
+		map_control: moveRate * 1.5 + attackRate * 0.5,
+	};
+
+	const entries = Object.entries(scoreByArchetype).sort((a, b) => b[1] - a[1]);
+	const best = entries[0];
+	const second = entries[1];
+	if (!best || !second) {
+		return { archetype: "unknown", confidence: 0 };
+	}
+	const margin = Math.max(0, best[1] - second[1]);
+	return {
+		archetype: best[0],
+		confidence: Math.min(1, 0.5 + margin),
+	};
+}
+
+function buildDashboardExplainabilityData(inputDir: string): {
+	timeline?: DashboardData["timeline"];
+	archetypeClassifier?: DashboardData["archetypeClassifier"];
+} {
+	const files = resolveArtifactFiles(inputDir);
+	if (files.length === 0) {
+		return {};
+	}
+
+	const openingCounts = new Map<string, number>();
+	const firstCommitmentTurns: number[] = [];
+	const powerSpikeTurns: number[] = [];
+	const decisiveSwingTurns: number[] = [];
+	const archetypeCounts = new Map<string, number>();
+	const archetypeSamples: NonNullable<
+		DashboardData["archetypeClassifier"]
+	>["sampleMatches"] = [];
+	const archetypeConfidences: number[] = [];
+
+	for (const file of files) {
+		let artifact: DashboardArtifact | null = null;
+		try {
+			artifact = JSON.parse(readFileSync(file, "utf-8")) as DashboardArtifact;
+		} catch {
+			continue;
+		}
+		const turns = artifact.turns ?? [];
+		if (turns.length === 0) continue;
+
+		const openingTurn = turns[0];
+		if (openingTurn) {
+			const openingLabel =
+				openingTurn.declaredPlan ??
+				(openingTurn.commandAttempts ?? []).find((attempt) => attempt.accepted)
+					?.move?.action ??
+				"unknown";
+			const normalized = normalizeOpeningChoice(openingLabel);
+			openingCounts.set(normalized, (openingCounts.get(normalized) ?? 0) + 1);
+		}
+
+		const commitmentTurn = detectFirstCommitmentTurn(turns);
+		if (commitmentTurn !== null) {
+			firstCommitmentTurns.push(commitmentTurn);
+		}
+
+		let matchDecisiveTurn: number | null = null;
+		for (let idx = 0; idx < turns.length; idx++) {
+			const turn = turns[idx];
+			if (!turn) continue;
+			const turnNumber = toTurnNumber(turn, idx);
+			if (turn.powerSpikeTriggered) {
+				powerSpikeTurns.push(turnNumber);
+			}
+			if (typeof turn.swingEvent === "string") {
+				if (turn.swingEvent.startsWith("decisive_")) {
+					matchDecisiveTurn = turnNumber;
+				}
+			}
+		}
+		if (matchDecisiveTurn !== null) {
+			decisiveSwingTurns.push(matchDecisiveTurn);
+		} else {
+			const fallbackSwing = turns.findIndex(
+				(turn) => typeof turn.swingEvent === "string",
+			);
+			if (fallbackSwing >= 0) {
+				decisiveSwingTurns.push(
+					toTurnNumber(
+						turns[fallbackSwing] as DashboardArtifactTurn,
+						fallbackSwing,
+					),
+				);
+			}
+		}
+
+		const classified = classifyMatchArchetype(turns);
+		archetypeCounts.set(
+			classified.archetype,
+			(archetypeCounts.get(classified.archetype) ?? 0) + 1,
+		);
+		archetypeConfidences.push(classified.confidence);
+		archetypeSamples.push({
+			seed:
+				typeof artifact.seed === "number" && Number.isFinite(artifact.seed)
+					? artifact.seed
+					: null,
+			winner:
+				typeof artifact.result?.winner === "string" ||
+				artifact.result?.winner === null
+					? artifact.result.winner
+					: null,
+			archetype: classified.archetype,
+			confidence: classified.confidence,
+		});
+	}
+
+	const matchesAnalyzed = archetypeSamples.length;
+	if (matchesAnalyzed === 0) {
+		return {};
+	}
+
+	const openingChoice = Array.from(openingCounts.entries())
+		.sort((a, b) => b[1] - a[1])
+		.slice(0, 5)
+		.map(([label, count]) => ({
+			label,
+			count,
+			rate: count / matchesAnalyzed,
+		}));
+
+	const powerSpikeByTurn = Array.from(
+		powerSpikeTurns.reduce((acc, turn) => {
+			acc.set(turn, (acc.get(turn) ?? 0) + 1);
+			return acc;
+		}, new Map<number, number>()),
+	)
+		.sort((a, b) => b[1] - a[1])
+		.slice(0, 5)
+		.map(([turn, count]) => ({
+			turn,
+			count,
+			rate: count / matchesAnalyzed,
+		}));
+
+	const archetypeDistribution = Array.from(archetypeCounts.entries())
+		.sort((a, b) => b[1] - a[1])
+		.map(([archetype, count]) => ({
+			archetype,
+			count,
+			rate: count / matchesAnalyzed,
+		}));
+
+	return {
+		timeline: {
+			matchesAnalyzed,
+			openingChoice,
+			firstCommitment: {
+				meanTurn: mean(firstCommitmentTurns),
+				medianTurn: median(firstCommitmentTurns),
+				samples: firstCommitmentTurns.length,
+			},
+			powerSpikeTurns: powerSpikeByTurn,
+			decisiveSwing: {
+				meanTurn: mean(decisiveSwingTurns),
+				medianTurn: median(decisiveSwingTurns),
+				samples: decisiveSwingTurns.length,
+			},
+		},
+		archetypeClassifier: {
+			matchesAnalyzed,
+			primaryArchetype: archetypeDistribution[0]?.archetype ?? null,
+			averageConfidence: mean(archetypeConfidences) ?? 0,
+			distribution: archetypeDistribution,
+			sampleMatches: archetypeSamples.slice(0, 20),
+		},
+	};
 }
 
 async function main() {
@@ -246,7 +632,10 @@ async function main() {
 					| "all_archer"
 					| "infantry_archer"
 					| "cavalry_archer"
-					| "infantry_cavalry")
+					| "infantry_cavalry"
+					| "high_ground_clash"
+					| "forest_chokepoints"
+					| "resource_race")
 			: undefined;
 
 	if (
@@ -466,6 +855,14 @@ async function main() {
 			anomalies: [],
 			matchLengths: stats.matchLengths,
 		};
+		const explainabilityData = buildDashboardExplainabilityData(inputDir);
+		if (explainabilityData.timeline) {
+			dashboardData.timeline = explainabilityData.timeline;
+		}
+		if (explainabilityData.archetypeClassifier) {
+			dashboardData.archetypeClassifier =
+				explainabilityData.archetypeClassifier;
+		}
 
 		generateDashboard(dashboardData, dashboardOutput);
 
@@ -516,7 +913,7 @@ async function main() {
 	console.error("  --actionsPerTurn N  Actions per turn (default: 7)");
 	console.error("  --boardColumns N    Board width: 17 or 21 (default: 17)");
 	console.error(
-		"  --scenario NAME     Combat scenario: melee, ranged, stronghold_rush, midfield, all_infantry, all_cavalry, all_archer, infantry_archer, cavalry_archer, infantry_cavalry",
+		"  --scenario NAME     Combat scenario: melee, ranged, stronghold_rush, midfield, all_infantry, all_cavalry, all_archer, infantry_archer, cavalry_archer, infantry_cavalry, high_ground_clash, forest_chokepoints, resource_race",
 	);
 	console.error(
 		"  --harness MODE      Runner harness: legacy, boardgameio (default: legacy)",

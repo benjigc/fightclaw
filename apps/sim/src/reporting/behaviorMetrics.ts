@@ -11,6 +11,9 @@ type ParsedUnit = {
 
 type ParsedState = {
 	side: "A" | "B";
+	gold: number | null;
+	wood: number | null;
+	terrainByHex: Record<string, string>;
 	ownUnits: ParsedUnit[];
 	enemyUnits: ParsedUnit[];
 };
@@ -20,6 +23,17 @@ type ArtifactTurn = {
 	prompt?: string;
 	rawOutput?: string;
 	metricsV2?: {
+		actions?: {
+			byTypeAccepted?: Record<string, number>;
+		};
+		combat?: {
+			ownHpDelta?: number;
+		};
+		resources?: {
+			ownGoldDelta?: number;
+			ownWoodDelta?: number;
+		};
+		side?: "A" | "B";
 		upgrade?: {
 			upgradesAccepted?: number;
 			estimatedGoldSpend?: number;
@@ -98,6 +112,46 @@ type BehaviorSummary = {
 		avgEstimatedUpgradeGoldSpendPerGame: number;
 		avgEstimatedUpgradeWoodSpendPerGame: number;
 	};
+	archetypeSeparation: {
+		actionMixSignal: Record<string, number>;
+		resourceSpendCurveSignal: {
+			early: number;
+			mid: number;
+			late: number;
+			totalEstimatedSpend: number;
+		};
+	};
+	macroIndex: {
+		recruitTiming: {
+			gamesWithRecruit: number;
+			meanFirstRecruitTurn: number | null;
+		};
+		bankedResources: {
+			turnsWithResourceState: number;
+			avgGold: number | null;
+			avgWood: number | null;
+			avgTotalBanked: number | null;
+		};
+		nodeControlDurationProxy: {
+			samples: number;
+			avgControlledNodeShare: number | null;
+		};
+		score: number;
+	};
+	terrainLeverage: {
+		fightsInitiated: number;
+		fightsWithTerrainData: number;
+		advantagedInitiations: number;
+		leverageRate: number | null;
+	};
+	fortifyROI: {
+		fortifyActionsAccepted: number;
+		woodSpentEstimate: number;
+		damagePreventedEstimate: number;
+		roi: number | null;
+		samplesAfterFortify: number;
+		samplesWithoutFortify: number;
+	};
 	telemetryCoverage: {
 		turns: number;
 		turnsWithPrompt: number;
@@ -108,6 +162,17 @@ type BehaviorSummary = {
 	};
 };
 
+const ECON_NODE_TERRAINS = new Set(["gold_mine", "lumber_camp", "crown"]);
+
+const TERRAIN_ADVANTAGE_SCORE: Record<string, number> = {
+	crown: 4,
+	high_ground: 3,
+	hills: 2,
+	forest: 1,
+	lumber_camp: 1,
+	gold_mine: 1,
+};
+
 function parseCol(hexId: string): number | null {
 	const n = Number.parseInt(hexId.replace(/^[A-Z]/i, ""), 10);
 	return Number.isFinite(n) ? n : null;
@@ -115,9 +180,16 @@ function parseCol(hexId: string): number | null {
 
 function parseStateFromPrompt(prompt: string | undefined): ParsedState | null {
 	if (!prompt) return null;
-	const stateMatch = prompt.match(/STATE\s+turn=\d+\s+player=([AB])/);
+	const stateLine = prompt
+		.split("\n")
+		.find((line) => line.trimStart().startsWith("STATE "));
+	const stateMatch = stateLine?.match(
+		/STATE\s+turn=\d+\s+player=([AB])(?:\s+actions=\d+)?\s+gold=(-?\d+)\s+wood=(-?\d+)/,
+	);
 	if (!stateMatch) return null;
 	const side = stateMatch[1] as "A" | "B";
+	const gold = Number.parseInt(stateMatch[2] ?? "", 10);
+	const wood = Number.parseInt(stateMatch[3] ?? "", 10);
 	const ownMatch = prompt.match(
 		new RegExp(`UNITS_${side}:([\\s\\S]*?)(?:\\n\\n|\\nUNITS_)`),
 	);
@@ -130,9 +202,36 @@ function parseStateFromPrompt(prompt: string | undefined): ParsedState | null {
 	if (!ownMatch || !enemyMatch) return null;
 	return {
 		side,
+		gold: Number.isFinite(gold) ? gold : null,
+		wood: Number.isFinite(wood) ? wood : null,
+		terrainByHex: parseTerrainBlock(prompt),
 		ownUnits: parseUnitsBlock(ownMatch[1], side),
 		enemyUnits: parseUnitsBlock(enemyMatch[1], enemySide),
 	};
+}
+
+function parseTerrainBlock(prompt: string): Record<string, string> {
+	const terrainMatch = prompt.match(
+		/TERRAIN_NEAR_UNITS:\n([\s\S]*?)(?:\n\n|\nTURN_DELTA_|\nTACTICAL_|\nLEGAL_MOVES:|$)/,
+	);
+	if (!terrainMatch?.[1]) return {};
+	const mappings = terrainMatch[1]
+		.split(/\s+/)
+		.map((token) => token.trim())
+		.filter(Boolean);
+	const byHex: Record<string, string> = {};
+	for (const mapping of mappings) {
+		const eqIndex = mapping.indexOf("=");
+		if (eqIndex <= 0) continue;
+		const hex = mapping.slice(0, eqIndex).trim().toUpperCase();
+		const terrain = mapping
+			.slice(eqIndex + 1)
+			.trim()
+			.toLowerCase();
+		if (!hex || !terrain) continue;
+		byHex[hex] = terrain;
+	}
+	return byHex;
 }
 
 function parseUnitsBlock(block: string, side: "A" | "B"): ParsedUnit[] {
@@ -167,6 +266,26 @@ function sumHp(units: ParsedUnit[]): number {
 function mean(values: number[]): number {
 	if (values.length === 0) return 0;
 	return values.reduce((s, v) => s + v, 0) / values.length;
+}
+
+function clamp01(value: number): number {
+	if (Number.isNaN(value)) return 0;
+	if (value < 0) return 0;
+	if (value > 1) return 1;
+	return value;
+}
+
+function toPhase(i: number, total: number): "early" | "mid" | "late" {
+	if (total <= 1) return "early";
+	const p = i / (total - 1);
+	if (p < 1 / 3) return "early";
+	if (p < 2 / 3) return "mid";
+	return "late";
+}
+
+function terrainScore(terrain: string | undefined): number {
+	if (!terrain) return 0;
+	return TERRAIN_ADVANTAGE_SCORE[terrain] ?? 0;
 }
 
 function shannonEntropy(counts: Map<string, number>): number {
@@ -220,6 +339,21 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 	let totalEstimatedUpgradeGoldSpend = 0;
 	let totalEstimatedUpgradeWoodSpend = 0;
 	const firstUpgradeTurns: number[] = [];
+	const firstRecruitTurns: number[] = [];
+	const bankedGoldSamples: number[] = [];
+	const bankedWoodSamples: number[] = [];
+	const nodeControlShares: number[] = [];
+	const resourceSpendByPhase = {
+		early: 0,
+		mid: 0,
+		late: 0,
+	};
+	let terrainFightsInitiated = 0;
+	let terrainFightsWithData = 0;
+	let terrainAdvantagedInitiations = 0;
+	let fortifyActionsAccepted = 0;
+	const ownHpLossAfterFortify: number[] = [];
+	const ownHpLossWithoutFortify: number[] = [];
 	let turns = 0;
 	let turnsWithPrompt = 0;
 	let turnsWithRawOutput = 0;
@@ -233,6 +367,8 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 		let gameUpgradeCount = 0;
 		let gameUpgradeGoldSpend = 0;
 		let gameUpgradeWoodSpend = 0;
+		let gameFirstRecruitTurn: number | null = null;
+		const lastTurnUsedFortifyBySide: Partial<Record<"A" | "B", boolean>> = {};
 
 		const actionCounts = new Map<string, number>();
 		for (const mv of artifact.acceptedMoves ?? []) {
@@ -306,12 +442,75 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 
 			const before = parsedStates[i];
 			const after = i + 1 < parsedStates.length ? parsedStates[i + 1] : null;
+			const sideKey = before?.side ?? turn.metricsV2?.side;
+			const ownHpLoss =
+				typeof turn.metricsV2?.combat?.ownHpDelta === "number"
+					? Math.max(0, -turn.metricsV2.combat.ownHpDelta)
+					: null;
+
+			if (before) {
+				if (before.gold !== null) bankedGoldSamples.push(before.gold);
+				if (before.wood !== null) bankedWoodSamples.push(before.wood);
+				if (before.ownUnits.length > 0) {
+					let onNode = 0;
+					for (const unit of before.ownUnits) {
+						const terrain = before.terrainByHex[unit.position];
+						if (terrain && ECON_NODE_TERRAINS.has(terrain)) onNode++;
+					}
+					nodeControlShares.push(onNode / before.ownUnits.length);
+				}
+			}
 
 			const accepted = turn.commandAttempts.filter((a) => a.accepted);
+			const acceptedFortifies = accepted.filter(
+				(a) => a.move.action === "fortify",
+			);
+			fortifyActionsAccepted += acceptedFortifies.length;
+			if (gameFirstRecruitTurn === null) {
+				const hasRecruit = accepted.some((a) => a.move.action === "recruit");
+				if (hasRecruit) gameFirstRecruitTurn = i + 1;
+			}
+			const resourceGoldSpend = Math.max(
+				0,
+				-(turn.metricsV2?.resources?.ownGoldDelta ?? 0),
+			);
+			const resourceWoodSpend = Math.max(
+				0,
+				-(turn.metricsV2?.resources?.ownWoodDelta ?? 0),
+			);
+			const resourceSpend = resourceGoldSpend + resourceWoodSpend;
+			if (resourceSpend > 0) {
+				const phase = toPhase(i, artifact.turns.length);
+				resourceSpendByPhase[phase] += resourceSpend;
+			}
 			const turnAttackAttempts = accepted.filter(
 				(a) => a.move.action === "attack",
 			);
 			attacks += turnAttackAttempts.length;
+			terrainFightsInitiated += turnAttackAttempts.length;
+
+			if (before && turnAttackAttempts.length > 0) {
+				const ownById = new Map(before.ownUnits.map((u) => [u.id, u]));
+				const enemyByPos = new Map(
+					before.enemyUnits.map((u) => [u.position, u]),
+				);
+				for (const attack of turnAttackAttempts) {
+					const attacker = attack.move.unitId
+						? ownById.get(attack.move.unitId)
+						: undefined;
+					const targetPos = attack.move.target;
+					if (!attacker || !targetPos) continue;
+					const defender = enemyByPos.get(targetPos);
+					if (!defender) continue;
+					const attackerTerrain = before.terrainByHex[attacker.position];
+					const defenderTerrain = before.terrainByHex[defender.position];
+					if (!attackerTerrain || !defenderTerrain) continue;
+					terrainFightsWithData++;
+					if (terrainScore(attackerTerrain) > terrainScore(defenderTerrain)) {
+						terrainAdvantagedInitiations++;
+					}
+				}
+			}
 
 			if (before && after && turnAttackAttempts.length > 0) {
 				attackTurnsWithSnapshot++;
@@ -375,6 +574,15 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 					}
 				}
 			}
+
+			if (sideKey && ownHpLoss !== null) {
+				if (lastTurnUsedFortifyBySide[sideKey]) {
+					ownHpLossAfterFortify.push(ownHpLoss);
+				} else {
+					ownHpLossWithoutFortify.push(ownHpLoss);
+				}
+				lastTurnUsedFortifyBySide[sideKey] = acceptedFortifies.length > 0;
+			}
 		}
 
 		if (gameHasUpgrade) {
@@ -385,6 +593,9 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 			if (gameFirstUpgradeTurn !== null) {
 				firstUpgradeTurns.push(gameFirstUpgradeTurn);
 			}
+		}
+		if (gameFirstRecruitTurn !== null) {
+			firstRecruitTurns.push(gameFirstRecruitTurn);
 		}
 
 		for (const side of ["A", "B"] as const) {
@@ -427,6 +638,53 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 				acceptedActionTotal > 0 ? count / acceptedActionTotal : 0,
 			]),
 	);
+	const totalResourceSpend =
+		resourceSpendByPhase.early +
+		resourceSpendByPhase.mid +
+		resourceSpendByPhase.late;
+	const normalizedSpendCurve = {
+		early:
+			totalResourceSpend > 0
+				? resourceSpendByPhase.early / totalResourceSpend
+				: 0,
+		mid:
+			totalResourceSpend > 0
+				? resourceSpendByPhase.mid / totalResourceSpend
+				: 0,
+		late:
+			totalResourceSpend > 0
+				? resourceSpendByPhase.late / totalResourceSpend
+				: 0,
+	};
+
+	const meanFirstRecruitTurn =
+		firstRecruitTurns.length > 0 ? mean(firstRecruitTurns) : null;
+	const avgGold = bankedGoldSamples.length > 0 ? mean(bankedGoldSamples) : null;
+	const avgWood = bankedWoodSamples.length > 0 ? mean(bankedWoodSamples) : null;
+	const avgTotalBanked =
+		avgGold !== null && avgWood !== null ? avgGold + avgWood : null;
+	const avgControlledNodeShare =
+		nodeControlShares.length > 0 ? mean(nodeControlShares) : null;
+	const recruitTimingScore =
+		meanFirstRecruitTurn !== null
+			? clamp01(1 - (meanFirstRecruitTurn - 1) / 20)
+			: 0;
+	const bankedResourcesScore =
+		avgTotalBanked !== null ? clamp01(1 - avgTotalBanked / 40) : 0;
+	const nodeControlScore = avgControlledNodeShare ?? 0;
+	const macroScore = clamp01(
+		(recruitTimingScore + bankedResourcesScore + nodeControlScore) / 3,
+	);
+	const baselineLoss =
+		ownHpLossWithoutFortify.length > 0 ? mean(ownHpLossWithoutFortify) : 0;
+	const postFortifyLoss =
+		ownHpLossAfterFortify.length > 0 ? mean(ownHpLossAfterFortify) : 0;
+	const damagePreventedPerSample = Math.max(0, baselineLoss - postFortifyLoss);
+	const damagePreventedEstimate =
+		damagePreventedPerSample * ownHpLossAfterFortify.length;
+	const woodSpentEstimate = fortifyActionsAccepted * 2;
+	const fortifyRoi =
+		woodSpentEstimate > 0 ? damagePreventedEstimate / woodSpentEstimate : null;
 
 	return {
 		games: files.length,
@@ -488,6 +746,50 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 				files.length > 0 ? totalEstimatedUpgradeGoldSpend / files.length : 0,
 			avgEstimatedUpgradeWoodSpendPerGame:
 				files.length > 0 ? totalEstimatedUpgradeWoodSpend / files.length : 0,
+		},
+		archetypeSeparation: {
+			actionMixSignal: normalizedAcceptedActions,
+			resourceSpendCurveSignal: {
+				...normalizedSpendCurve,
+				totalEstimatedSpend: totalResourceSpend,
+			},
+		},
+		macroIndex: {
+			recruitTiming: {
+				gamesWithRecruit: firstRecruitTurns.length,
+				meanFirstRecruitTurn,
+			},
+			bankedResources: {
+				turnsWithResourceState: Math.min(
+					bankedGoldSamples.length,
+					bankedWoodSamples.length,
+				),
+				avgGold,
+				avgWood,
+				avgTotalBanked,
+			},
+			nodeControlDurationProxy: {
+				samples: nodeControlShares.length,
+				avgControlledNodeShare,
+			},
+			score: macroScore,
+		},
+		terrainLeverage: {
+			fightsInitiated: terrainFightsInitiated,
+			fightsWithTerrainData: terrainFightsWithData,
+			advantagedInitiations: terrainAdvantagedInitiations,
+			leverageRate:
+				terrainFightsWithData > 0
+					? terrainAdvantagedInitiations / terrainFightsWithData
+					: null,
+		},
+		fortifyROI: {
+			fortifyActionsAccepted,
+			woodSpentEstimate,
+			damagePreventedEstimate,
+			roi: fortifyRoi,
+			samplesAfterFortify: ownHpLossAfterFortify.length,
+			samplesWithoutFortify: ownHpLossWithoutFortify.length,
 		},
 		telemetryCoverage: {
 			turns,

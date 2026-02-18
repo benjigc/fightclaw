@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import * as path from "node:path";
 
 type Scenario = "midfield" | "melee" | "all_infantry" | "all_cavalry";
@@ -54,6 +60,19 @@ function parseArg(name: string): string | undefined {
 
 function hasFlag(name: string): boolean {
 	return process.argv.includes(name);
+}
+
+function parseBoolArg(name: string, fallback: boolean): boolean {
+	const value = parseArg(name);
+	if (value === undefined) return fallback;
+	const normalized = value.toLowerCase();
+	if (normalized === "true" || normalized === "1" || normalized === "yes") {
+		return true;
+	}
+	if (normalized === "false" || normalized === "0" || normalized === "no") {
+		return false;
+	}
+	return fallback;
 }
 
 function runCmd(
@@ -113,6 +132,9 @@ function aggregateSummaries(laneDir: string): Aggregate {
 		byScenario: {},
 	};
 	let weightedTurns = 0;
+	if (!existsSync(laneDir)) {
+		return aggregate;
+	}
 
 	for (const entry of readdirSync(laneDir)) {
 		const summaryPath = path.join(laneDir, entry, "summary.json");
@@ -162,13 +184,39 @@ function aggregateSummaries(laneDir: string): Aggregate {
 	return aggregate;
 }
 
+function shouldSkipCompletedMatchup(
+	outputDirAbs: string,
+	expectedGames: number,
+	resumeEnabled: boolean,
+): boolean {
+	if (!resumeEnabled) return false;
+	const summaryPath = path.join(outputDirAbs, "summary.json");
+	if (!existsSync(summaryPath)) return false;
+	try {
+		const summary = JSON.parse(readFileSync(summaryPath, "utf-8")) as {
+			totalGames?: number;
+			completedGames?: number;
+		};
+		const completed = summary.completedGames ?? summary.totalGames ?? 0;
+		return completed >= expectedGames;
+	} catch {
+		return false;
+	}
+}
+
 function main() {
 	const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 	const simDir = path.join(repoRoot, "apps", "sim");
 	const dryRun = hasFlag("--dryRun");
 	const withApi = hasFlag("--withApi");
+	const skipFastLane = hasFlag("--skipFastLane") || hasFlag("--apiOnly");
+	const resume = parseBoolArg("--resume", true);
 	const gamesPerMatchup = Number.parseInt(
 		parseArg("--gamesPerMatchup") ?? "4",
+		10,
+	);
+	const apiGamesPerMatchup = Number.parseInt(
+		parseArg("--apiGamesPerMatchup") ?? "1",
 		10,
 	);
 	const maxTurns = Number.parseInt(parseArg("--maxTurns") ?? "200", 10);
@@ -220,58 +268,63 @@ function main() {
 		`Matchups: ${matchups.length} (scenarios=${scenarios.length}, mirroredPairs=${mirroredPairs.length})`,
 	);
 	console.log(`Games per matchup: ${gamesPerMatchup}`);
+	console.log(`Skip fast lane: ${skipFastLane}`);
+	console.log(`Resume completed matchups: ${resume}`);
 	console.log(
 		`Engine/harness locks: boardColumns=17, turnLimit=40, actionsPerTurn=7, maxTurns=${maxTurns}, harness=boardgameio`,
 	);
 	const apiFailures: string[] = [];
+	const skippedApiMatchups: string[] = [];
 
 	const fastLaneDirInSim = path.join(outputBaseInSim, "fast_lane");
-	for (const matchup of matchups) {
-		const output = path.join(
-			fastLaneDirInSim,
-			`${matchup.scenario}__${matchup.bot1}_vs_${matchup.bot2}`,
-		);
-		runCmd(
-			repoRoot,
-			[
-				"-C",
-				"apps/sim",
-				"exec",
-				"tsx",
-				"src/cli.ts",
-				"mass",
-				"--games",
-				String(gamesPerMatchup),
-				"--parallel",
-				"4",
-				"--output",
-				output,
-				"--harness",
-				"boardgameio",
-				"--boardColumns",
-				"17",
-				"--turnLimit",
-				"40",
-				"--actionsPerTurn",
-				"7",
-				"--maxTurns",
-				String(maxTurns),
-				"--scenario",
-				matchup.scenario,
-				"--bot1",
-				"mockllm",
-				"--bot2",
-				"mockllm",
-				"--strategy1",
-				matchup.bot1,
-				"--strategy2",
-				matchup.bot2,
-				"--seed",
-				String(matchup.seed),
-				"--quiet",
-			],
-			dryRun,
-		);
+	if (!skipFastLane) {
+		for (const matchup of matchups) {
+			const output = path.join(
+				fastLaneDirInSim,
+				`${matchup.scenario}__${matchup.bot1}_vs_${matchup.bot2}`,
+			);
+			runCmd(
+				repoRoot,
+				[
+					"-C",
+					"apps/sim",
+					"exec",
+					"tsx",
+					"src/cli.ts",
+					"mass",
+					"--games",
+					String(gamesPerMatchup),
+					"--parallel",
+					"4",
+					"--output",
+					output,
+					"--harness",
+					"boardgameio",
+					"--boardColumns",
+					"17",
+					"--turnLimit",
+					"40",
+					"--actionsPerTurn",
+					"7",
+					"--maxTurns",
+					String(maxTurns),
+					"--scenario",
+					matchup.scenario,
+					"--bot1",
+					"mockllm",
+					"--bot2",
+					"mockllm",
+					"--strategy1",
+					matchup.bot1,
+					"--strategy2",
+					matchup.bot2,
+					"--seed",
+					String(matchup.seed),
+					"--quiet",
+				],
+				dryRun,
+			);
+		}
 	}
 
 	if (withApi) {
@@ -292,6 +345,17 @@ function main() {
 					apiLaneDirInSim,
 					`${scenario}__${bot1}_vs_${bot2}`,
 				);
+				if (
+					shouldSkipCompletedMatchup(
+						path.join(simDir, output),
+						apiGamesPerMatchup,
+						resume,
+					)
+				) {
+					skippedApiMatchups.push(path.basename(output));
+					apiSeed += 1;
+					continue;
+				}
 				const ok = runCmd(
 					repoRoot,
 					[
@@ -302,7 +366,7 @@ function main() {
 						"src/cli.ts",
 						"mass",
 						"--games",
-						"1",
+						String(apiGamesPerMatchup),
 						"--parallel",
 						"1",
 						"--output",
@@ -374,9 +438,12 @@ function main() {
 			actionsPerTurn: 7,
 			maxTurns,
 			gamesPerMatchup,
+			apiGamesPerMatchup,
 			baseSeed,
 			matchupCount: matchups.length,
 			withApi,
+			skipFastLane,
+			resume,
 			apiModel: withApi ? model : null,
 		},
 		fastLane: aggregateSummaries(path.join(outputBaseAbs, "fast_lane")),
@@ -387,6 +454,8 @@ function main() {
 			? {
 					failedMatchups: apiFailures,
 					failedMatchupCount: apiFailures.length,
+					skippedApiMatchups,
+					skippedApiMatchupCount: skippedApiMatchups.length,
 					apiCommandTimeoutMs: Math.max(0, apiCommandTimeoutMs),
 					apiCommandRetries: Math.max(0, apiCommandRetries),
 				}

@@ -1,5 +1,6 @@
 import { Client } from "boardgame.io/dist/cjs/client.js";
 import { Local } from "boardgame.io/dist/cjs/multiplayer.js";
+import { encodeState } from "../bots/stateEncoder";
 import {
 	getDiagnosticsCollector,
 	resetDiagnosticsCollector,
@@ -137,6 +138,7 @@ export async function playMatchBoardgameIO(
 				legalMoves,
 				state: state.G.matchState,
 				rng,
+				playerID: actingPlayerID,
 			});
 			const turnRecordIdx = artifact.startTurn(
 				{
@@ -147,6 +149,11 @@ export async function playMatchBoardgameIO(
 				},
 				actingPlayerID,
 			);
+			const initialExplainability = buildInitialTurnExplainability(
+				plan.moves,
+				plan.meta.rawOutput,
+			);
+			artifact.setTurnExplainability(turnRecordIdx, initialExplainability);
 			const turnStartState = state.G.matchState;
 
 			let turnComplete = false;
@@ -208,14 +215,15 @@ export async function playMatchBoardgameIO(
 					move,
 					accepted: true,
 				});
+				const engineMove = stripMoveAnnotations(move);
 				artifact.recordAcceptedMove({
 					ply: acceptedMoves.length + 1,
 					playerID: actingPlayerID,
-					engineMove: move,
+					engineMove,
 					preHash,
 					postHash,
 				});
-				acceptedMoves.push(move);
+				acceptedMoves.push(engineMove);
 
 				if (opts.enableDiagnostics) {
 					getDiagnosticsCollector().logTurn(
@@ -334,11 +342,19 @@ export async function playMatchBoardgameIO(
 				artifact.getTurnCommandAttempts(turnRecordIdx),
 			);
 			artifact.setTurnMetrics(turnRecordIdx, turnMetrics);
+			artifact.setTurnExplainability(
+				turnRecordIdx,
+				buildMetricsExplainability(
+					turnMetrics,
+					artifact.getTurnCommandAttempts(turnRecordIdx),
+				),
+			);
 
 			completedTurns = turnIndex;
 		}
 
 		const finalState = requireState(client.getState());
+		const finalTerminal = Engine.isTerminal(finalState.G.matchState);
 		const result: MatchResult = forfeitTriggered
 			? finalizeResult({
 					seed: opts.seed,
@@ -352,18 +368,31 @@ export async function playMatchBoardgameIO(
 					playerPair,
 					record: opts.record,
 				})
-			: finalizeResult({
-					seed: opts.seed,
-					turns: opts.maxTurns,
-					winner: Engine.winner(finalState.G.matchState),
-					illegalMoves,
-					reason: "maxTurns",
-					state: finalState.G.matchState,
-					acceptedMoves,
-					engineEvents,
-					playerPair,
-					record: opts.record,
-				});
+			: finalTerminal.ended
+				? finalizeResult({
+						seed: opts.seed,
+						turns: completedTurns,
+						winner: finalTerminal.winner ?? null,
+						illegalMoves,
+						reason: "terminal",
+						state: finalState.G.matchState,
+						acceptedMoves,
+						engineEvents,
+						playerPair,
+						record: opts.record,
+					})
+				: finalizeResult({
+						seed: opts.seed,
+						turns: opts.maxTurns,
+						winner: Engine.winner(finalState.G.matchState),
+						illegalMoves,
+						reason: "maxTurns",
+						state: finalState.G.matchState,
+						acceptedMoves,
+						engineEvents,
+						playerPair,
+						record: opts.record,
+					});
 
 		artifact.setResult(
 			resultSummaryFromResult(result),
@@ -399,6 +428,155 @@ function resultSummaryFromResult(result: MatchResult) {
 		turns: result.turns,
 		illegalMoves: result.illegalMoves,
 	};
+}
+
+function stripMoveAnnotations(move: Move): Move {
+	const clean = {
+		...(move as Move & { reasoning?: string; metadata?: unknown }),
+	};
+	delete clean.reasoning;
+	delete clean.metadata;
+	return clean as Move;
+}
+
+function buildInitialTurnExplainability(
+	moves: Move[],
+	rawOutput?: string,
+): {
+	declaredPlan?: string;
+	whyThisMove?: string;
+} {
+	const declaredFromOutput = extractDeclaredPlan(rawOutput);
+	const declaredFromMoves = summarizePlanFromMoves(moves);
+	const whyFromMoves = extractWhyThisMoveFromMoves(moves);
+	const whyFromOutput = extractReasoningFromOutput(rawOutput);
+	return {
+		declaredPlan: declaredFromOutput ?? declaredFromMoves,
+		whyThisMove: whyFromMoves ?? whyFromOutput,
+	};
+}
+
+function buildMetricsExplainability(
+	metrics: TurnMetricsV2,
+	attempts: Array<{ accepted: boolean; move: Move }>,
+): {
+	powerSpikeTriggered: boolean;
+	swingEvent?: string;
+	whyThisMove?: string;
+} {
+	const enemyUnitsLost = Math.max(0, -metrics.combat.enemyUnitsDelta);
+	const ownUnitsLost = Math.max(0, -metrics.combat.ownUnitsDelta);
+	const enemyHpLoss = Math.max(0, -metrics.combat.enemyHpDelta);
+	const ownHpLoss = Math.max(0, -metrics.combat.ownHpDelta);
+	const vpSwing = metrics.resources.ownVpDelta - metrics.resources.enemyVpDelta;
+	const swingScore =
+		(enemyUnitsLost - ownUnitsLost) * 6 +
+		(enemyHpLoss - ownHpLoss) +
+		vpSwing * 5 +
+		(metrics.combat.finisherSuccesses > 0 ? 4 : 0);
+
+	const powerSpikeTriggered =
+		swingScore >= 8 ||
+		(metrics.combat.favorableTrade &&
+			(enemyHpLoss >= 4 || enemyUnitsLost >= 1 || vpSwing >= 2));
+
+	let swingEvent: string | undefined;
+	if (swingScore >= 12) {
+		swingEvent = `decisive_swing(score=${swingScore})`;
+	} else if (enemyUnitsLost > ownUnitsLost && enemyUnitsLost > 0) {
+		swingEvent = `unit_trade(enemy=${enemyUnitsLost},own=${ownUnitsLost})`;
+	} else if (enemyHpLoss - ownHpLoss >= 4) {
+		swingEvent = `hp_swing(net=${enemyHpLoss - ownHpLoss})`;
+	} else if (vpSwing >= 2) {
+		swingEvent = `vp_swing(net=${vpSwing})`;
+	}
+
+	return {
+		powerSpikeTriggered,
+		swingEvent,
+		whyThisMove: extractWhyThisMoveFromAttempts(attempts),
+	};
+}
+
+function extractDeclaredPlan(rawOutput?: string): string | undefined {
+	if (!rawOutput) return undefined;
+	const commandBlock = rawOutput.split("---")[0] ?? rawOutput;
+	const lines = commandBlock
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0 && !line.startsWith("#"))
+		.slice(0, 3);
+	if (lines.length === 0) return undefined;
+	return clipText(lines.join(" | "), 220);
+}
+
+function summarizePlanFromMoves(moves: Move[]): string | undefined {
+	if (moves.length === 0) return undefined;
+	const summary = moves
+		.slice(0, 5)
+		.map((move) => summarizeMove(move))
+		.join(" -> ");
+	return clipText(summary, 220);
+}
+
+function summarizeMove(move: Move): string {
+	switch (move.action) {
+		case "attack":
+			return `attack ${move.unitId} ${move.target}`;
+		case "move":
+			return `move ${move.unitId} ${move.to}`;
+		case "recruit":
+			return `recruit ${move.unitType} ${move.at}`;
+		case "fortify":
+			return `fortify ${move.unitId}`;
+		case "upgrade":
+			return `upgrade ${move.unitId}`;
+		default:
+			return move.action;
+	}
+}
+
+function extractReasoningFromOutput(rawOutput?: string): string | undefined {
+	if (!rawOutput) return undefined;
+	const sections = rawOutput.split("---");
+	if (sections.length < 2) return undefined;
+	const reasoning = sections.slice(1).join("---").trim();
+	return reasoning.length > 0 ? clipText(reasoning, 240) : undefined;
+}
+
+function extractWhyThisMoveFromAttempts(
+	attempts: Array<{ accepted: boolean; move: Move }>,
+): string | undefined {
+	const accepted = attempts.filter((attempt) => attempt.accepted);
+	const preferred = accepted.length > 0 ? accepted : attempts;
+	for (const attempt of preferred) {
+		const why = extractWhyThisMoveFromMove(attempt.move);
+		if (why) return why;
+	}
+	return undefined;
+}
+
+function extractWhyThisMoveFromMoves(moves: Move[]): string | undefined {
+	for (const move of moves) {
+		const why = extractWhyThisMoveFromMove(move);
+		if (why) return why;
+	}
+	return undefined;
+}
+
+function extractWhyThisMoveFromMove(move: Move): string | undefined {
+	const annotated = move as Move & {
+		reasoning?: string;
+		metadata?: { whyThisMove?: string };
+	};
+	const why = annotated.metadata?.whyThisMove ?? annotated.reasoning;
+	if (!why || why.trim().length === 0) return undefined;
+	return clipText(why.trim(), 240);
+}
+
+function clipText(input: string, maxChars: number): string {
+	if (input.length <= maxChars) return input;
+	return `${input.slice(0, maxChars - 3)}...`;
 }
 
 function buildTurnMetricsV2(
@@ -579,7 +757,10 @@ async function chooseTurnPlan(opts: {
 	legalMoves: Move[];
 	turnIndex: number;
 	rng: () => number;
+	playerID: string;
 }): Promise<{ moves: Move[]; meta: TurnPlanMeta }> {
+	const side = opts.state.players.A.id === opts.playerID ? "A" : "B";
+	const fallbackPrompt = encodeState(opts.state, side);
 	const detailed = opts.bot as Bot & {
 		chooseTurnWithMeta?: (ctx: {
 			state: Parameters<Bot["chooseMove"]>[0]["state"];
@@ -605,7 +786,7 @@ async function chooseTurnPlan(opts: {
 			moves: r.moves,
 			meta: {
 				turnIndex: opts.turnIndex,
-				prompt: r.prompt,
+				prompt: r.prompt ?? fallbackPrompt,
 				rawOutput: r.rawOutput,
 				model: r.model,
 			},
@@ -621,7 +802,7 @@ async function chooseTurnPlan(opts: {
 		});
 		return {
 			moves,
-			meta: { turnIndex: opts.turnIndex },
+			meta: { turnIndex: opts.turnIndex, prompt: fallbackPrompt },
 		};
 	}
 
@@ -633,7 +814,7 @@ async function chooseTurnPlan(opts: {
 	});
 	return {
 		moves: [move],
-		meta: { turnIndex: opts.turnIndex },
+		meta: { turnIndex: opts.turnIndex, prompt: fallbackPrompt },
 	};
 }
 

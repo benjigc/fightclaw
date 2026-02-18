@@ -1239,6 +1239,81 @@ describe("v2 engine - War of Attrition", () => {
 		expect(atkEvent?.defensePower).toBe(5);
 	});
 
+	test("fortify bonus is configurable and stacks with terrain fortify bonuses", () => {
+		let state = createInitialState(
+			0,
+			{
+				abilities: { fortifyBonus: 2 },
+				fortifyDefenseBonusByTerrain: { hills: 2 },
+			},
+			[...players],
+		);
+		state = clearUnits(state);
+		state = addUnitToState(state, "A-1", "cavalry", "A", "E6");
+		state = addUnitToState(state, "B-1", "infantry", "B", "E7", {
+			isFortified: true,
+		});
+
+		const result = applyMove(state, {
+			action: "attack",
+			unitId: "A-1",
+			target: "E7",
+		});
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const atkEvent = result.engineEvents.find((e) => e.type === "attack") as
+			| AttackEvent
+			| undefined;
+		expect(atkEvent).toBeTruthy();
+		expect(atkEvent?.defensePower).toBe(8);
+		expect(atkEvent?.abilities).toContain("fortify");
+	});
+
+	test("controlling multiple economy nodes grants long-horizon macro income", () => {
+		let state = createInitialState(0, undefined, [...players]);
+		state = structuredClone(state);
+		const b9Idx = hexIndex("B9");
+		const c8Idx = hexIndex("C8");
+		state.board[b9Idx] = { ...state.board[b9Idx]!, controlledBy: "A" };
+		state.board[c8Idx] = { ...state.board[c8Idx]!, controlledBy: "A" };
+
+		const startingGold = state.players.A.gold;
+		const startingWood = state.players.A.wood;
+
+		let result = applyMove(state, { action: "end_turn" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		result = applyMove(result.state, { action: "end_turn" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		expect(result.state.players.A.gold).toBe(startingGold + 8);
+		expect(result.state.players.A.wood).toBe(startingWood + 3);
+	});
+
+	test("comeback stipend applies when a player is behind on multiple axes", () => {
+		let state = createInitialState(0, undefined, [...players]);
+		state = structuredClone(state);
+		state.players.A.vp = 5;
+		state.players.B.vp = 0;
+
+		const removed = state.players.B.units.splice(0, 2);
+		for (const unit of removed) {
+			const idx = hexIndex(unit.position);
+			state.board[idx] = {
+				...state.board[idx]!,
+				unitIds: state.board[idx]!.unitIds.filter((id) => id !== unit.id),
+			};
+		}
+
+		const result = applyMove(state, { action: "end_turn" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.state.activePlayer).toBe("B");
+		expect(result.state.players.B.gold).toBe(21);
+		expect(result.state.players.B.wood).toBe(6);
+	});
+
 	// ---- Unit Stacking ----
 
 	test("same-type friendly units can stack on same hex", () => {

@@ -21,6 +21,45 @@ export interface DashboardData {
 		p75: number;
 		p95: number;
 	};
+	timeline?: {
+		matchesAnalyzed: number;
+		openingChoice: Array<{
+			label: string;
+			count: number;
+			rate: number;
+		}>;
+		firstCommitment: {
+			meanTurn: number | null;
+			medianTurn: number | null;
+			samples: number;
+		};
+		powerSpikeTurns: Array<{
+			turn: number;
+			count: number;
+			rate: number;
+		}>;
+		decisiveSwing: {
+			meanTurn: number | null;
+			medianTurn: number | null;
+			samples: number;
+		};
+	};
+	archetypeClassifier?: {
+		matchesAnalyzed: number;
+		primaryArchetype: string | null;
+		averageConfidence: number;
+		distribution: Array<{
+			archetype: string;
+			count: number;
+			rate: number;
+		}>;
+		sampleMatches: Array<{
+			seed: number | null;
+			winner: string | null;
+			archetype: string;
+			confidence: number;
+		}>;
+	};
 }
 
 export class DashboardGenerator {
@@ -248,6 +287,23 @@ export class DashboardGenerator {
 			color: var(--text-secondary);
 		}
 
+		.insight-list {
+			display: grid;
+			gap: 0.75rem;
+		}
+
+		.insight-row {
+			padding: 0.75rem;
+			border: 1px solid var(--border-color);
+			border-radius: 0.375rem;
+			font-size: 0.9rem;
+		}
+
+		.insight-key {
+			font-weight: 600;
+			margin-right: 0.35rem;
+		}
+
 		@media (max-width: 768px) {
 			.container {
 				padding: 1rem;
@@ -310,6 +366,21 @@ export class DashboardGenerator {
 				<div class="chart-title">Match Length Distribution</div>
 				<div class="chart-container">
 					<canvas id="lengthChart"></canvas>
+				</div>
+			</div>
+		</div>
+
+		<div class="charts-grid">
+			<div class="chart-card">
+				<div class="chart-title">Match Timeline Signals</div>
+				<div class="insight-list">
+					${this.generateTimelinePanel(data.timeline)}
+				</div>
+			</div>
+			<div class="chart-card">
+				<div class="chart-title">Post-Match Archetype Classifier</div>
+				<div class="insight-list">
+					${this.generateArchetypePanel(data.archetypeClassifier)}
 				</div>
 			</div>
 		</div>
@@ -436,6 +507,54 @@ export class DashboardGenerator {
 </html>`;
 	}
 
+	private generateTimelinePanel(data: DashboardData["timeline"]): string {
+		if (!data || data.matchesAnalyzed === 0) {
+			return `<div class="empty-state"><p>No timeline explainability data found.</p></div>`;
+		}
+
+		const opening = data.openingChoice[0];
+		const openingText = opening
+			? `${opening.label} (${(opening.rate * 100).toFixed(1)}%)`
+			: "n/a";
+		const spikes =
+			data.powerSpikeTurns.length > 0
+				? data.powerSpikeTurns
+						.map((item) => `T${item.turn} (${(item.rate * 100).toFixed(1)}%)`)
+						.join(", ")
+				: "none observed";
+
+		return [
+			`<div class="insight-row"><span class="insight-key">Opening choice:</span>${openingText}</div>`,
+			`<div class="insight-row"><span class="insight-key">First commitment:</span>mean T${formatTurn(data.firstCommitment.meanTurn)}, median T${formatTurn(data.firstCommitment.medianTurn)} (n=${data.firstCommitment.samples})</div>`,
+			`<div class="insight-row"><span class="insight-key">Power spike turns:</span>${spikes}</div>`,
+			`<div class="insight-row"><span class="insight-key">Decisive swing:</span>mean T${formatTurn(data.decisiveSwing.meanTurn)}, median T${formatTurn(data.decisiveSwing.medianTurn)} (n=${data.decisiveSwing.samples})</div>`,
+		].join("");
+	}
+
+	private generateArchetypePanel(
+		data: DashboardData["archetypeClassifier"],
+	): string {
+		if (!data || data.matchesAnalyzed === 0) {
+			return `<div class="empty-state"><p>No archetype classifier data found.</p></div>`;
+		}
+
+		const top = data.distribution[0];
+		const topText = top
+			? `${top.archetype} (${(top.rate * 100).toFixed(1)}%)`
+			: "n/a";
+		const mix = data.distribution
+			.slice(0, 4)
+			.map((item) => `${item.archetype}: ${(item.rate * 100).toFixed(1)}%`)
+			.join(", ");
+
+		return [
+			`<div class="insight-row"><span class="insight-key">Primary profile:</span>${topText}</div>`,
+			`<div class="insight-row"><span class="insight-key">Average confidence:</span>${(data.averageConfidence * 100).toFixed(1)}%</div>`,
+			`<div class="insight-row"><span class="insight-key">Distribution:</span>${mix || "n/a"}</div>`,
+			`<div class="insight-row"><span class="insight-key">Matches analyzed:</span>${data.matchesAnalyzed}</div>`,
+		].join("");
+	}
+
 	private generateAnomalyList(anomalies: Anomaly[]): string {
 		if (anomalies.length === 0) {
 			return `<div class="empty-state">
@@ -458,6 +577,11 @@ export class DashboardGenerator {
 			)
 			.join("");
 	}
+}
+
+function formatTurn(value: number | null): string {
+	if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
+	return value.toFixed(1);
 }
 
 export function generateDashboard(

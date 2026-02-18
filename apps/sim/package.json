@@ -12,7 +12,17 @@
 		"benchmark:v1": "tsx scripts/benchmark-v1.ts",
 		"benchmark:v1:api": "tsx scripts/benchmark-v1.ts --withApi",
 		"benchmark:v2": "tsx scripts/benchmark-v2.ts",
-		"benchmark:v2:api": "tsx scripts/benchmark-v2.ts --withApi",
+		"benchmark:v2:api_full": "tsx scripts/benchmark-v2.ts --withApi --apiOnly --apiLane api_full --gamesPerMatchup 1 --apiGamesPerMatchup 1 --apiParallelMatchups 2 --apiMaxTurns 120 --apiLlmParallelCalls 1 --apiLlmTimeoutMs 20000 --apiLlmMaxRetries 2 --apiLlmRetryBaseMs 600 --apiLlmMaxTokens 280 --apiCommandTimeoutMs 240000 --apiCommandRetries 1 --resume false",
+		"benchmark:v2:api_smoke": "tsx scripts/benchmark-v2.ts --withApi --apiOnly --apiLane api_smoke --gamesPerMatchup 1 --apiGamesPerMatchup 1 --apiParallelMatchups 2 --apiMaxTurns 80 --apiLlmParallelCalls 1 --apiLlmTimeoutMs 20000 --apiLlmMaxRetries 2 --apiLlmRetryBaseMs 600 --apiLlmMaxTokens 280 --apiCommandTimeoutMs 180000 --apiCommandRetries 1 --resume false",
+		"benchmark:v2:api": "pnpm run benchmark:v2:api_full",
+		"benchmark:v2:api:full": "pnpm run benchmark:v2:api_full",
+		"benchmark:v2:api:smoke": "pnpm run benchmark:v2:api_smoke",
+		"export:web-replay": "tsx scripts/export-web-replay.ts",
+		"benchmark:v2:api_full:viz": "pnpm run benchmark:v2:api_full && pnpm run export:web-replay",
+		"benchmark:v2:api_smoke:viz": "pnpm run benchmark:v2:api_smoke && pnpm run export:web-replay",
+		"scratch:test-game": "tsx scripts/scratch/test-game.ts",
+		"scratch:test-llm": "tsx scripts/scratch/test-llm.ts",
+		"scratch:test-parse": "tsx scripts/scratch/test-parse.ts",
 		"test": "bun test"
 	},
 	"dependencies": {

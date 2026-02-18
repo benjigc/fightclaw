@@ -595,6 +595,7 @@ export type EngineConfig = {
 	};
 	upgradeCosts: Record<BaseUnitType, { gold: number; wood: number }>;
 	terrainDefenseBonus: Record<HexType, number>;
+	fortifyDefenseBonusByTerrain: Partial<Record<HexType, number>>;
 	abilities: {
 		cavalryChargeBonus: number;
 		infantryAdjacencyBonusCap: number;
@@ -612,6 +613,14 @@ export type EngineConfig = {
 		lumberCampTick: number;
 		strongholdGoldTick: number;
 		crownVpTick: number;
+		economicNodeControlThreshold: number;
+		economicNodeBonusGold: number;
+		economicNodeBonusWood: number;
+		comebackVpDeficitThreshold: number;
+		comebackUnitDeficitThreshold: number;
+		comebackHexDeficitThreshold: number;
+		comebackGoldBonus: number;
+		comebackWoodBonus: number;
 	};
 };
 
@@ -691,11 +700,18 @@ export const DEFAULT_CONFIG: EngineConfig = {
 		stronghold_a: 1,
 		stronghold_b: 1,
 	},
+	fortifyDefenseBonusByTerrain: {
+		forest: 1,
+		hills: 1,
+		high_ground: 1,
+		stronghold_a: 1,
+		stronghold_b: 1,
+	},
 	abilities: {
 		cavalryChargeBonus: 2,
 		infantryAdjacencyBonusCap: 1,
 		archerMeleeVulnerability: 1,
-		fortifyBonus: 0,
+		fortifyBonus: 1,
 		attackerBonus: 2,
 		stackAttackBonus: 1,
 		maxStackSize: 5,
@@ -708,6 +724,14 @@ export const DEFAULT_CONFIG: EngineConfig = {
 		lumberCampTick: 2,
 		strongholdGoldTick: 2,
 		crownVpTick: 1,
+		economicNodeControlThreshold: 2,
+		economicNodeBonusGold: 1,
+		economicNodeBonusWood: 1,
+		comebackVpDeficitThreshold: 2,
+		comebackUnitDeficitThreshold: 2,
+		comebackHexDeficitThreshold: 6,
+		comebackGoldBonus: 2,
+		comebackWoodBonus: 1,
 	},
 };
 
@@ -749,6 +773,10 @@ function mergeConfig(input?: EngineConfigInput): EngineConfig {
 		terrainDefenseBonus: {
 			...DEFAULT_CONFIG.terrainDefenseBonus,
 			...input.terrainDefenseBonus,
+		},
+		fortifyDefenseBonusByTerrain: {
+			...DEFAULT_CONFIG.fortifyDefenseBonusByTerrain,
+			...input.fortifyDefenseBonusByTerrain,
 		},
 		abilities: { ...DEFAULT_CONFIG.abilities, ...input.abilities },
 		resourceNodes: {
@@ -1271,6 +1299,7 @@ function runStartOfPlayerTurnTick(
 ): TickResult {
 	const config = resolveConfig();
 	const player = state.players[side];
+	const enemy = state.players[otherSide(side)];
 
 	// 1. Reset flags on active player's units
 	for (const unit of player.units) {
@@ -1305,6 +1334,44 @@ function runStartOfPlayerTurnTick(
 		} else if (hex.type === "crown") {
 			vpGained += config.resourceNodes.crownVpTick;
 		}
+	}
+
+	// Long-horizon macro: holding multiple economy nodes compounds income.
+	let controlledEconomicNodes = 0;
+	for (const hex of state.board) {
+		if (hex.controlledBy !== side) continue;
+		if (hex.type === "gold_mine" || hex.type === "lumber_camp") {
+			controlledEconomicNodes += 1;
+		}
+	}
+	const economicNodeThreshold = Math.max(
+		1,
+		config.resourceNodes.economicNodeControlThreshold,
+	);
+	const economicTiers = Math.floor(
+		controlledEconomicNodes / economicNodeThreshold,
+	);
+	if (economicTiers > 0) {
+		goldIncome += economicTiers * config.resourceNodes.economicNodeBonusGold;
+		woodIncome += economicTiers * config.resourceNodes.economicNodeBonusWood;
+	}
+
+	// Comeback macro: trailing players receive a small stabilizer stipend.
+	const vpDeficit =
+		enemy.vp - player.vp >= config.resourceNodes.comebackVpDeficitThreshold;
+	const unitDeficit =
+		enemy.units.length - player.units.length >=
+		config.resourceNodes.comebackUnitDeficitThreshold;
+	const hexDeficit =
+		controlledHexCount(state, otherSide(side)) -
+			controlledHexCount(state, side) >=
+		config.resourceNodes.comebackHexDeficitThreshold;
+	const comebackSignals = [vpDeficit, unitDeficit, hexDeficit].filter(
+		Boolean,
+	).length;
+	if (comebackSignals >= 2) {
+		goldIncome += config.resourceNodes.comebackGoldBonus;
+		woodIncome += config.resourceNodes.comebackWoodBonus;
 	}
 
 	player.gold += goldIncome;
@@ -1443,6 +1510,10 @@ function computeCombat(
 	// Fortify bonus (any unit in stack fortified applies)
 	if (defenders.some((d) => d.isFortified)) {
 		defensePower += config.abilities.fortifyBonus;
+		if (defenderHex) {
+			defensePower +=
+				config.fortifyDefenseBonusByTerrain[defenderHex.type] ?? 0;
+		}
 		abilities.push("fortify");
 	}
 	// Slight melee pressure against fortified infantry to reduce stall loops.

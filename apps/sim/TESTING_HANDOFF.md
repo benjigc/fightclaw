@@ -77,3 +77,21 @@ Iteratively balance gameplay so prompt-driven strategies are distinct and watcha
   - `set -a; source .env; set +a; pnpm -C apps/sim run benchmark:v1:api`
 - Behavior metrics:
   - `pnpm -C apps/sim exec tsx src/cli.ts behavior --input <artifacts_or_results_dir> --output <dir>/behavior-metrics.json`
+- Standardized API lane scripts:
+  - Smoke: `pnpm -C apps/sim run benchmark:v2:api:lane:smoke`
+  - Full: `pnpm -C apps/sim run benchmark:v2:api:lane:full`
+  - Full (parallel matchups): `pnpm -C apps/sim run benchmark:v2:api:lane:full:parallel`
+  - Smoke (baseline profile): `pnpm -C apps/sim run benchmark:v2:api:lane:smoke:baseline`
+  - Full (baseline profile): `pnpm -C apps/sim run benchmark:v2:api:lane:full:baseline`
+- API lane optimization profile (current):
+  - matchup parallelism: `--apiParallelMatchups 3`
+  - lower per-call latency cap: `--apiLlmTimeoutMs 18000`
+  - one intra-turn retry for resilience: `--apiLlmMaxRetries 1`
+  - tighter command timeout cap: `--apiCommandTimeoutMs 180000-210000`
+  - explicit KPI budget gates: `--apiRuntimeBudgetMs`, `--apiMaxP95Turns`, `--apiMaxMaxTurnsRate`, `--apiMaxDrawRate`
+  - strict profile retained for stress checks: `benchmark:v2:api:lane:smoke:strict`
+- API KPI gate flags (for `scripts/benchmark-v2.ts`):
+  - `--apiMaxP95Turns <n>`: fail if API lane p95 turns exceeds threshold.
+  - `--apiMaxMaxTurnsRate <ratio>`: fail if `% reason=maxTurns` exceeds threshold.
+  - `--apiMaxDrawRate <ratio>`: fail if API lane draw rate exceeds threshold.
+  - `--apiRuntimeBudgetMs <ms>`: fail if total runtime of attempted API matchups exceeds budget.

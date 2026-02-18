@@ -35,6 +35,70 @@ const TERRAIN_DISPLAY: Record<string, string> = {
 	stronghold_b: "stronghold",
 };
 
+const ROWS = 9;
+
+function parseHexId(id: string): { row: number; col: number } | null {
+	const match = /^([A-I])(\d+)$/.exec(id);
+	if (!match) return null;
+	const rowChar = match[1];
+	const colRaw = match[2];
+	if (!rowChar || !colRaw) return null;
+	return {
+		row: rowChar.charCodeAt(0) - 65,
+		col: Number.parseInt(colRaw, 10) - 1,
+	};
+}
+
+function toHexId(row: number, col: number): string {
+	return `${String.fromCharCode(65 + row)}${col + 1}`;
+}
+
+function neighborsOfHex(id: string, cols: number): string[] {
+	const parsed = parseHexId(id);
+	if (!parsed) return [];
+	const { row, col } = parsed;
+	const deltas =
+		row % 2 === 0
+			? [
+					[+1, 0],
+					[0, +1],
+					[-1, +1],
+					[-1, 0],
+					[-1, -1],
+					[0, -1],
+				]
+			: [
+					[+1, 0],
+					[+1, +1],
+					[0, +1],
+					[-1, 0],
+					[0, -1],
+					[+1, -1],
+				];
+	const result: string[] = [];
+	for (const [dc, dr] of deltas) {
+		const nr = row + dr;
+		const nc = col + dc;
+		if (nr >= 0 && nr < ROWS && nc >= 0 && nc < cols) {
+			result.push(toHexId(nr, nc));
+		}
+	}
+	return result;
+}
+
+function compareHexId(a: string, b: string): number {
+	const pa = parseHexId(a);
+	const pb = parseHexId(b);
+	if (!pa || !pb) return a.localeCompare(b);
+	return pa.row - pb.row || pa.col - pb.col;
+}
+
+function compareTerrainEntry(a: string, b: string): number {
+	const aHex = a.split("=")[0] ?? a;
+	const bHex = b.split("=")[0] ?? b;
+	return compareHexId(aHex, bHex);
+}
+
 // ---------------------------------------------------------------------------
 // encodeMove — single move to CLI command string
 // ---------------------------------------------------------------------------
@@ -72,6 +136,7 @@ export function encodeState(
 	const enemy = state.players[enemySide];
 
 	const lines: string[] = [];
+	const boardCols = Math.floor(state.board.length / ROWS);
 
 	// Header
 	lines.push(
@@ -138,7 +203,36 @@ export function encodeState(
 	}
 	if (terrainEntries.length > 0) {
 		lines.push("TERRAIN_NEAR_UNITS:");
-		lines.push(`  ${terrainEntries.join(" ")}`);
+		lines.push(`  ${terrainEntries.sort(compareTerrainEntry).join(" ")}`);
+		lines.push("");
+	}
+
+	// Contested nearby terrain — interesting hexes adjacent to both sides.
+	const nearbyByA = new Set<string>();
+	const nearbyByB = new Set<string>();
+	for (const unit of player.units) {
+		nearbyByA.add(unit.position);
+		for (const nearby of neighborsOfHex(unit.position, boardCols)) {
+			nearbyByA.add(nearby);
+		}
+	}
+	for (const unit of enemy.units) {
+		nearbyByB.add(unit.position);
+		for (const nearby of neighborsOfHex(unit.position, boardCols)) {
+			nearbyByB.add(nearby);
+		}
+	}
+	const contestedEntries: string[] = [];
+	for (const hex of state.board) {
+		if (BORING_TERRAIN.has(hex.type)) continue;
+		if (!nearbyByA.has(hex.id) || !nearbyByB.has(hex.id)) continue;
+		if (seenPositions.has(hex.id)) continue;
+		const display = TERRAIN_DISPLAY[hex.type] ?? hex.type;
+		contestedEntries.push(`${hex.id}=${display}`);
+	}
+	if (contestedEntries.length > 0) {
+		lines.push("TERRAIN_CONTESTED_NEARBY:");
+		lines.push(`  ${contestedEntries.sort(compareTerrainEntry).join(" ")}`);
 		lines.push("");
 	}
 

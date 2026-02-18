@@ -48,4 +48,38 @@ describe("combat scenarios", () => {
 		expect(state.players.A.units.every((u) => u.type === "cavalry")).toBe(true);
 		expect(state.players.B.units.every((u) => u.type === "archer")).toBe(true);
 	});
+
+	test("high_ground_clash scenario positions both teams around high ground", () => {
+		const state = createCombatScenario(1, ["a", "b"], "high_ground_clash");
+		const highGround = new Set(
+			state.board.filter((h) => h.type === "high_ground").map((h) => h.id),
+		);
+		const nearHighGround = [
+			...state.players.A.units,
+			...state.players.B.units,
+		].some(
+			(u) =>
+				highGround.has(u.position) ||
+				u.position === "D10" ||
+				u.position === "D12" ||
+				u.position === "E10" ||
+				u.position === "E12" ||
+				u.position === "F12",
+		);
+		expect(nearHighGround).toBe(true);
+	});
+
+	test("resource_race scenario starts units on economy-heavy terrain", () => {
+		const state = createCombatScenario(1, ["a", "b"], "resource_race");
+		const byHex = new Map(state.board.map((hex) => [hex.id, hex.type]));
+		const terrainTypes = [
+			byHex.get(state.players.A.units[0]?.position ?? ""),
+			byHex.get(state.players.A.units[1]?.position ?? ""),
+			byHex.get(state.players.B.units[0]?.position ?? ""),
+			byHex.get(state.players.B.units[1]?.position ?? ""),
+		];
+		expect(
+			terrainTypes.some((t) => t === "gold_mine" || t === "lumber_camp"),
+		).toBe(true);
+	});
 });

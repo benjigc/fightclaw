@@ -41,7 +41,9 @@ export function applyEngineMoveChecked(opts: {
 	rejectionReason?: string;
 	engineEventsCount: number;
 } {
-	if (!MoveSchema.safeParse(opts.move).success) {
+	const engineMove = stripMoveAnnotations(opts.move);
+
+	if (!MoveSchema.safeParse(engineMove).success) {
 		return {
 			accepted: false,
 			nextState: opts.state,
@@ -53,7 +55,7 @@ export function applyEngineMoveChecked(opts: {
 	if (opts.validationMode === "strict") {
 		const legalMoves = Engine.listLegalMoves(opts.state);
 		const legal = legalMoves.some(
-			(m) => stripReasoningJson(m) === stripReasoningJson(opts.move),
+			(m) => stripReasoningJson(m) === stripReasoningJson(engineMove),
 		);
 		if (!legal) {
 			return {
@@ -65,7 +67,7 @@ export function applyEngineMoveChecked(opts: {
 		}
 	}
 
-	const result = Engine.applyMove(opts.state, opts.move);
+	const result = Engine.applyMove(opts.state, engineMove);
 	if (!result.ok) {
 		return {
 			accepted: false,
@@ -82,7 +84,19 @@ export function applyEngineMoveChecked(opts: {
 }
 
 function stripReasoningJson(move: Move): string {
-	const clean = { ...(move as Move & { reasoning?: string }) };
+	const clean = {
+		...(move as Move & { reasoning?: string; metadata?: unknown }),
+	};
 	delete clean.reasoning;
+	delete clean.metadata;
 	return JSON.stringify(clean);
+}
+
+function stripMoveAnnotations(move: Move): Move {
+	const clean = {
+		...(move as Move & { reasoning?: string; metadata?: unknown }),
+	};
+	delete clean.reasoning;
+	delete clean.metadata;
+	return clean as Move;
 }

@@ -2,6 +2,41 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pickOne } from "../rng";
 import type { Bot, MatchState, Move } from "../types";
+import {
+	type ArchetypeConfig,
+	type BotPhase,
+	DEFAULT_PHASE_POLICY,
+	MOCK_LLM_ARCHETYPES,
+	type MockLlmArchetypeName,
+	type UtilityTerm,
+} from "./mockLlmArchetypes";
+
+type LegacyStrategy = "aggressive" | "defensive" | "random" | "strategic";
+type StrategyLike = LegacyStrategy | MockLlmArchetypeName;
+
+interface MoveUtilityBreakdown {
+	archetype: MockLlmArchetypeName | "random";
+	phase: BotPhase;
+	phaseTriggers: string[];
+	baseActionBias: number;
+	phaseActionBias: number;
+	promptBonus: number;
+	policyAdjustments: number;
+	termsRaw: Record<UtilityTerm, number>;
+	termWeights: Record<UtilityTerm, number>;
+	termsWeighted: Record<UtilityTerm, number>;
+	total: number;
+}
+
+interface MoveMetadata {
+	whyThisMove: string;
+	breakdown: MoveUtilityBreakdown;
+}
+
+interface MoveCandidate {
+	move: Move;
+	metadata: MoveMetadata;
+}
 
 /** Configuration for mock LLM bot */
 export interface MockLlmConfig {
@@ -9,15 +44,38 @@ export interface MockLlmConfig {
 	inline?: string;
 	/** Path to JSON file with prompt config */
 	file?: string;
-	/** Strategy pattern: aggressive, defensive, random, strategic */
-	strategy?: "aggressive" | "defensive" | "random" | "strategic";
+	/** Strategy pattern (legacy or direct archetype) */
+	strategy?: StrategyLike;
+	/** Explicit archetype override */
+	archetype?: MockLlmArchetypeName;
 }
 
 /** File-based prompt config */
 interface PromptFileConfig {
 	botId: string;
 	inline?: string;
-	strategy?: "aggressive" | "defensive" | "random" | "strategic";
+	strategy?: StrategyLike;
+	archetype?: MockLlmArchetypeName;
+}
+
+interface PromptIntents {
+	attack: boolean;
+	defend: boolean;
+	recruit: boolean;
+	advance: boolean;
+}
+
+interface ScoringContext {
+	move: Move;
+	state: MatchState;
+	side: "A" | "B";
+	archetype: ArchetypeConfig;
+	phase: BotPhase;
+	phaseTriggers: string[];
+	turn: number;
+	promptIntents: PromptIntents;
+	hasPlayableAlternatives: boolean;
+	hasLegalAttack: boolean;
 }
 
 function loadPromptFromFile(filePath: string): PromptFileConfig {
@@ -26,52 +84,6 @@ function loadPromptFromFile(filePath: string): PromptFileConfig {
 		: path.resolve(process.cwd(), filePath);
 	const content = fs.readFileSync(absolutePath, "utf-8");
 	return JSON.parse(content) as PromptFileConfig;
-}
-
-const actionScores: Record<string, Record<Move["action"], number>> = {
-	aggressive: {
-		attack: 95,
-		move: 70,
-		recruit: 35,
-		fortify: 15,
-		upgrade: 48,
-		end_turn: -20,
-		pass: -20,
-	},
-	defensive: {
-		fortify: 80,
-		recruit: 70,
-		move: 45,
-		attack: 57,
-		upgrade: 62,
-		end_turn: 5,
-		pass: 0,
-	},
-	balanced: {
-		attack: 90,
-		move: 72,
-		recruit: 60,
-		fortify: 35,
-		upgrade: 58,
-		end_turn: 0,
-		pass: 0,
-	},
-	strategic: {
-		attack: 102,
-		move: 82,
-		recruit: 62,
-		fortify: 28,
-		upgrade: 66,
-		end_turn: -5,
-		pass: -5,
-	},
-};
-
-interface PromptIntents {
-	attack: boolean;
-	defend: boolean;
-	recruit: boolean;
-	advance: boolean;
 }
 
 function includesAny(haystack: string, needles: string[]): boolean {
@@ -148,27 +160,6 @@ function enemyUnitsAtHex(state: MatchState, side: "A" | "B", hexId: string) {
 	return enemy.units.filter((unit) => unit.position === hexId);
 }
 
-function isAllCavalryMirror(state: MatchState): boolean {
-	const a = state.players.A.units;
-	const b = state.players.B.units;
-	if (a.length === 0 || b.length === 0) return false;
-	return (
-		a.every((u) => isCavalryLine(u.type)) &&
-		b.every((u) => isCavalryLine(u.type))
-	);
-}
-
-function isCavalryLine(unitType: string): boolean {
-	return unitType === "cavalry" || unitType === "knight";
-}
-
-function archetypeUnit(unitType: string): "infantry" | "cavalry" | "archer" {
-	if (unitType === "swordsman") return "infantry";
-	if (unitType === "knight") return "cavalry";
-	if (unitType === "crossbow") return "archer";
-	return unitType as "infantry" | "cavalry" | "archer";
-}
-
 function friendlyUnitsAtHex(state: MatchState, side: "A" | "B", hexId: string) {
 	const own = side === "A" ? state.players.A : state.players.B;
 	return own.units.filter((unit) => unit.position === hexId);
@@ -177,6 +168,13 @@ function friendlyUnitsAtHex(state: MatchState, side: "A" | "B", hexId: string) {
 function hexTypeAt(state: MatchState, hexId: string): string | null {
 	const hex = state.board.find((h) => h.id === hexId);
 	return hex?.type ?? null;
+}
+
+function archetypeUnit(unitType: string): "infantry" | "cavalry" | "archer" {
+	if (unitType === "swordsman") return "infantry";
+	if (unitType === "knight") return "cavalry";
+	if (unitType === "crossbow") return "archer";
+	return unitType as "infantry" | "cavalry" | "archer";
 }
 
 function matchupBonus(attackerType: string, defenderType: string): number {
@@ -191,152 +189,273 @@ function matchupBonus(attackerType: string, defenderType: string): number {
 	return 0;
 }
 
-function strategicWeight(
-	value: number,
-	strategy: "aggressive" | "defensive" | "random" | "strategic",
-): number {
-	if (strategy === "strategic") return Math.round(value * 1.25);
-	if (strategy === "aggressive") return Math.round(value * 0.8);
-	if (strategy === "defensive") return Math.round(value * 0.85);
-	return value;
-}
+function resolvePhase(ctx: {
+	state: MatchState;
+	side: "A" | "B";
+	turn: number;
+	hasLegalAttack: boolean;
+}): { phase: BotPhase; triggers: string[] } {
+	const triggers: string[] = [];
+	const own = ctx.side === "A" ? ctx.state.players.A : ctx.state.players.B;
+	const enemy = ctx.side === "A" ? ctx.state.players.B : ctx.state.players.A;
+	const vpLead = own.vp - enemy.vp;
 
-function scoreMoveContext(
-	move: Move,
-	state: MatchState,
-	side: "A" | "B",
-	strategy: "aggressive" | "defensive" | "random" | "strategic",
-): number {
-	switch (move.action) {
-		case "attack": {
-			const attacker = findUnit(state, move.unitId);
-			const enemies = enemyUnitsAtHex(state, side, move.target);
-			const damaged = enemies.filter((u) => u.hp < u.maxHp).length;
-			const finishable = enemies.filter((u) => u.hp <= 1).length;
-			const typeBonus =
-				attacker && enemies.length > 0
-					? Math.max(
-							...enemies.map((enemy) =>
-								matchupBonus(attacker.type, enemy.type),
-							),
-						)
-					: 0;
-			const fortifiedPenalty = enemies.some((enemy) => enemy.isFortified)
-				? strategy === "strategic"
-					? -3
-					: -8
-				: 0;
-			const strategicTacticalBonus =
-				strategy === "strategic"
-					? damaged * 10 + finishable * 35 + (enemies.length > 1 ? 8 : 0)
-					: 0;
-			const contextScore =
-				enemies.length * 12 +
-				damaged * 18 +
-				finishable * 25 +
-				typeBonus +
-				fortifiedPenalty +
-				strategicTacticalBonus;
-			return (
-				strategicWeight(contextScore, strategy) +
-				(strategy === "aggressive" ? 10 : 0)
-			);
-		}
-		case "move": {
-			const mover = findUnit(state, move.unitId);
-			if (!mover) return 0;
-			const fromCol = colIndex(mover.position);
-			const toCol = colIndex(move.to);
-			const delta = side === "A" ? toCol - fromCol : fromCol - toCol;
-			const targetTerrain = hexTypeAt(state, move.to);
-			const terrainBonus =
-				targetTerrain === "high_ground"
-					? 12
-					: targetTerrain === "hills" || targetTerrain === "forest"
-						? 6
-						: 0;
-			const stackUnits = friendlyUnitsAtHex(state, side, move.to);
-			const stackBonus =
-				stackUnits.length > 0 &&
-				stackUnits.every((u) => u.type === mover.type) &&
-				stackUnits.length < 5
-					? 8
-					: 0;
-			return strategicWeight(delta * 6 + terrainBonus + stackBonus, strategy);
-		}
-		case "recruit": {
-			const ownUnits =
-				side === "A"
-					? state.players.A.units.length
-					: state.players.B.units.length;
-			return ownUnits < 4 ? 20 : 0;
-		}
-		case "upgrade": {
-			const unit = findUnit(state, move.unitId);
-			if (!unit) return 0;
-			const baseBonus =
-				unit.type === "infantry"
-					? 20
-					: unit.type === "cavalry"
-						? 24
-						: unit.type === "archer"
-							? 22
-							: 0;
-			return strategicWeight(baseBonus, strategy);
-		}
-		default:
-			return 0;
+	if (ctx.turn <= DEFAULT_PHASE_POLICY.openingTurnMax) {
+		triggers.push(`turn<=${DEFAULT_PHASE_POLICY.openingTurnMax}`);
+		return { phase: "opening", triggers };
 	}
+
+	if (ctx.turn >= DEFAULT_PHASE_POLICY.closingTurnMin) {
+		triggers.push(`turn>=${DEFAULT_PHASE_POLICY.closingTurnMin}`);
+	}
+	if (enemy.units.length <= DEFAULT_PHASE_POLICY.closingUnitsThreshold) {
+		triggers.push(`enemyUnits<=${DEFAULT_PHASE_POLICY.closingUnitsThreshold}`);
+	}
+	if (own.units.length <= DEFAULT_PHASE_POLICY.closingUnitsThreshold) {
+		triggers.push(`ownUnits<=${DEFAULT_PHASE_POLICY.closingUnitsThreshold}`);
+	}
+	if (
+		Math.abs(vpLead) >= DEFAULT_PHASE_POLICY.closingVpLeadThreshold &&
+		ctx.turn > DEFAULT_PHASE_POLICY.openingTurnMax
+	) {
+		triggers.push(`absVpLead>=${DEFAULT_PHASE_POLICY.closingVpLeadThreshold}`);
+	}
+	if (
+		ctx.hasLegalAttack &&
+		ctx.turn >= DEFAULT_PHASE_POLICY.closingTurnMin - 2 &&
+		enemy.units.length <= DEFAULT_PHASE_POLICY.closingUnitsThreshold + 1
+	) {
+		triggers.push("tactical_closing_window");
+	}
+
+	if (triggers.length > 0) {
+		return { phase: "closing", triggers };
+	}
+	return { phase: "midgame", triggers: ["default"] };
 }
 
-/**
- * Score a move based on strategy and optional prompt instructions.
- * The "strategic" mode parses prompt text to bias move selection,
- * simulating how real LLM agents interpret prompt instructions.
- */
-function scoreMoveForStrategy(
-	move: Move,
-	state: MatchState,
-	side: "A" | "B",
-	strategy: "aggressive" | "defensive" | "random" | "strategic",
-	turn: number,
+function mapStrategyToArchetype(
+	strategy: StrategyLike,
+): MockLlmArchetypeName | null {
+	if (strategy === "random") return null;
+	if (strategy in MOCK_LLM_ARCHETYPES) {
+		return strategy as MockLlmArchetypeName;
+	}
+	if (strategy === "aggressive") return "timing_push";
+	if (strategy === "defensive") return "turtle_boom";
+	return "map_control";
+}
+
+function inferArchetypeFromIntents(
+	mapped: MockLlmArchetypeName,
 	promptIntents: PromptIntents,
-	hasPlayableAlternatives: boolean,
-): number {
-	if (strategy === "random") return 0;
-	const cavalryMirror = isAllCavalryMirror(state);
+): MockLlmArchetypeName {
+	if (promptIntents.recruit && !promptIntents.attack) return "greedy_macro";
+	if (promptIntents.defend && !promptIntents.advance) return "turtle_boom";
+	if (promptIntents.advance && promptIntents.attack) return "timing_push";
+	if (promptIntents.advance) return "map_control";
+	return mapped;
+}
 
-	const baseTable =
-		strategy === "aggressive"
-			? actionScores.aggressive
-			: strategy === "defensive"
-				? actionScores.defensive
-				: strategy === "strategic"
-					? actionScores.strategic
-					: actionScores.balanced;
-	let score = baseTable[move.action] ?? 0;
+function scorePromptBias(move: Move, promptIntents: PromptIntents): number {
+	let bonus = 0;
+	if (promptIntents.attack && move.action === "attack") bonus += 65;
+	if (promptIntents.defend && move.action === "fortify") bonus += 32;
+	if (promptIntents.defend && move.action === "recruit") bonus += 14;
+	if (promptIntents.defend && move.action === "upgrade") bonus += 8;
+	if (promptIntents.recruit && move.action === "recruit") bonus += 28;
+	if (promptIntents.recruit && move.action === "upgrade") bonus += 18;
+	if (promptIntents.advance && move.action === "move") bonus += 22;
+	if (promptIntents.advance && move.action === "attack") bonus += 10;
+	return bonus;
+}
 
-	if (promptIntents.attack && move.action === "attack") score += 65;
-	if (promptIntents.defend && move.action === "fortify") score += 30;
-	if (promptIntents.defend && move.action === "recruit") score += 15;
-	if (promptIntents.defend && move.action === "upgrade") score += 8;
-	if (promptIntents.recruit && move.action === "recruit") score += 25;
-	if (promptIntents.recruit && move.action === "upgrade") score += 18;
-	if (promptIntents.advance && move.action === "move") score += 20;
-	if (promptIntents.advance && move.action === "attack") score += 10;
+function combatValue(ctx: ScoringContext): number {
+	const { move, state, side } = ctx;
+	if (move.action === "attack") {
+		const attacker = findUnit(state, move.unitId);
+		const enemies = enemyUnitsAtHex(state, side, move.target);
+		const damaged = enemies.filter((u) => u.hp < u.maxHp).length;
+		const finishable = enemies.filter((u) => u.hp <= 1).length;
+		const typeBonus =
+			attacker && enemies.length > 0
+				? Math.max(
+						...enemies.map((enemy) => matchupBonus(attacker.type, enemy.type)),
+					)
+				: 0;
+		const fortifiedPenalty = enemies.some((enemy) => enemy.isFortified)
+			? -8
+			: 0;
+		return (
+			enemies.length * 12 +
+			damaged * 16 +
+			finishable * 30 +
+			typeBonus +
+			fortifiedPenalty
+		);
+	}
 
-	score += scoreMoveContext(move, state, side, strategy);
-	score += scoreUpgradeTiming(move, state, side, strategy, turn);
+	if (move.action === "fortify") {
+		const unit = findUnit(state, move.unitId);
+		if (!unit) return 0;
+		const enemy = side === "A" ? state.players.B : state.players.A;
+		const threatened = enemy.units.some(
+			(u) => Math.abs(colIndex(u.position) - colIndex(unit.position)) <= 1,
+		);
+		return threatened ? 14 : 4;
+	}
 
-	if (strategy === "strategic" && cavalryMirror) {
-		if (move.action === "recruit") score += 18;
-		if (move.action === "fortify") score += 14;
-		if (move.action === "move") score += 8;
-		if (move.action === "attack") {
-			const enemies = enemyUnitsAtHex(state, side, move.target);
-			const finishable = enemies.filter((u) => u.hp <= 1).length;
-			if (finishable === 0) score -= 10;
+	if (move.action === "upgrade") {
+		const unit = findUnit(state, move.unitId);
+		if (!unit) return 0;
+		if (unit.type === "infantry") return 14;
+		if (unit.type === "archer") return 12;
+		if (unit.type === "cavalry") return 10;
+	}
+
+	return 0;
+}
+
+function positionValue(ctx: ScoringContext): number {
+	const { move, state, side } = ctx;
+	if (move.action !== "move") return 0;
+	const mover = findUnit(state, move.unitId);
+	if (!mover) return 0;
+
+	const fromCol = colIndex(mover.position);
+	const toCol = colIndex(move.to);
+	const delta = side === "A" ? toCol - fromCol : fromCol - toCol;
+	const targetTerrain = hexTypeAt(state, move.to);
+	const terrainBonus =
+		targetTerrain === "high_ground"
+			? 12
+			: targetTerrain === "hills" || targetTerrain === "forest"
+				? 6
+				: targetTerrain === "gold_mine" || targetTerrain === "lumber_camp"
+					? 7
+					: 0;
+	const stackUnits = friendlyUnitsAtHex(state, side, move.to);
+	const stackBonus =
+		stackUnits.length > 0 &&
+		stackUnits.every((u) => u.type === mover.type) &&
+		stackUnits.length < 5
+			? 8
+			: 0;
+
+	return delta * 6 + terrainBonus + stackBonus;
+}
+
+function economyValue(ctx: ScoringContext): number {
+	const { move, state, side, phase } = ctx;
+	const own = side === "A" ? state.players.A : state.players.B;
+	const enemy = side === "A" ? state.players.B : state.players.A;
+	const resourceLead = own.gold + own.wood - (enemy.gold + enemy.wood);
+	const unitDiff = own.units.length - enemy.units.length;
+
+	if (move.action === "recruit") {
+		let value = 12;
+		if (own.units.length < 4) value += 14;
+		if (resourceLead > 4) value += 8;
+		if (phase === "closing") value -= 20;
+		return value;
+	}
+
+	if (move.action === "upgrade") {
+		const unit = findUnit(state, move.unitId);
+		if (!unit) return 0;
+		let value = 10;
+		if (resourceLead > 2) value += 6;
+		if (unitDiff <= -1) value += 4;
+		if (phase === "closing") value -= 8;
+		return value;
+	}
+
+	if (move.action === "fortify") {
+		if (resourceLead < 0) return -4;
+		return phase === "opening" ? 4 : 0;
+	}
+
+	return 0;
+}
+
+function riskValue(ctx: ScoringContext): number {
+	const { move, state, side, phase } = ctx;
+	if (move.action === "attack") {
+		const enemies = enemyUnitsAtHex(state, side, move.target);
+		const attacker = findUnit(state, move.unitId);
+		if (!attacker || enemies.length === 0) return -5;
+		const hpGap = attacker.hp - Math.max(...enemies.map((u) => u.hp));
+		const fortifiedEnemies = enemies.filter((u) => u.isFortified).length;
+		let value = hpGap * 4 - fortifiedEnemies * 6;
+		if (phase === "closing") {
+			value += 8;
 		}
+		return value;
+	}
+	if (move.action === "move") {
+		const unit = findUnit(state, move.unitId);
+		if (!unit) return 0;
+		const enemy = side === "A" ? state.players.B : state.players.A;
+		const destinationCol = colIndex(move.to);
+		const exposed = enemy.units.some(
+			(u) => Math.abs(colIndex(u.position) - destinationCol) <= 1,
+		);
+		return exposed ? -8 : 3;
+	}
+	if (move.action === "fortify") return 10;
+	if (move.action === "end_turn" || move.action === "pass") return -2;
+	return 0;
+}
+
+function timingValue(ctx: ScoringContext): number {
+	const { move, state, side, turn, phase, hasLegalAttack } = ctx;
+	if (move.action === "upgrade") {
+		if (turn <= 10) return 16;
+		if (turn <= 20) return 8;
+		return -8;
+	}
+	if (move.action === "attack") {
+		const enemies = enemyUnitsAtHex(state, side, move.target);
+		const finishable = enemies.filter((u) => u.hp <= 1).length;
+		let value = finishable * 22;
+		if (phase === "closing") value += 16;
+		if (hasLegalAttack) value += turn >= 16 ? 18 : 10;
+		return value;
+	}
+	if (move.action === "move") {
+		if (phase === "opening") return 8;
+		if (phase === "closing") return -10;
+		return 2;
+	}
+	if (move.action === "recruit") {
+		if (phase === "opening") return 10;
+		if (phase === "closing") return -18;
+		return 0;
+	}
+	if (move.action === "fortify") {
+		if (phase === "closing") return -8;
+		return phase === "opening" ? 4 : 0;
+	}
+	return 0;
+}
+
+function scorePolicyAdjustments(ctx: ScoringContext): number {
+	const { move, turn, hasLegalAttack, hasPlayableAlternatives, phase } = ctx;
+	let score = 0;
+
+	if (hasLegalAttack) {
+		if (move.action === "attack") {
+			score += turn >= 16 ? 28 : 14;
+		}
+		if (move.action === "move" && turn >= 22) score -= 14;
+		if (move.action === "recruit" && turn >= 14) score -= 26;
+	}
+
+	if (phase === "closing") {
+		if (move.action === "move") score -= 8;
+		if (move.action === "recruit") score -= 16;
+		if (move.action === "fortify") score -= 10;
+		if (move.action === "attack") score += 14;
 	}
 
 	if (
@@ -345,64 +464,117 @@ function scoreMoveForStrategy(
 	) {
 		score -= 100;
 	}
-
 	return score;
 }
 
-function scoreUpgradeTiming(
-	move: Move,
-	state: MatchState,
-	side: "A" | "B",
-	strategy: "aggressive" | "defensive" | "random" | "strategic",
-	turn: number,
-): number {
-	if (move.action !== "upgrade" || strategy === "random") return 0;
-	const unit = findUnit(state, move.unitId);
-	if (!unit) return 0;
-	if (
-		unit.type !== "infantry" &&
-		unit.type !== "cavalry" &&
-		unit.type !== "archer"
-	) {
-		return -20;
-	}
-	const own = side === "A" ? state.players.A : state.players.B;
-	const enemy = side === "A" ? state.players.B : state.players.A;
-	const resLead = own.gold + own.wood - (enemy.gold + enemy.wood);
-
-	if (strategy === "aggressive") {
-		if (turn <= 10) {
-			if (unit.type === "cavalry") return 38;
-			return 14;
-		}
-		if (turn <= 20) return unit.type === "cavalry" ? 18 : 8;
-		return -8;
+function buildWeightedTerms(
+	raw: Record<UtilityTerm, number>,
+	archetype: ArchetypeConfig,
+	phase: BotPhase,
+): {
+	weights: Record<UtilityTerm, number>;
+	weighted: Record<UtilityTerm, number>;
+	total: number;
+} {
+	const weights = { ...archetype.termWeights };
+	for (const key of Object.keys(
+		archetype.phaseTermNudges[phase],
+	) as UtilityTerm[]) {
+		weights[key] += archetype.phaseTermNudges[phase][key] ?? 0;
 	}
 
-	if (strategy === "defensive") {
-		if (turn <= 9) return -16;
-		if (turn <= 22) {
-			if (unit.type === "infantry" || unit.type === "archer") return 24;
-			return 10;
-		}
-		return 6;
-	}
+	const weighted = {
+		combatValue: Math.round(raw.combatValue * weights.combatValue),
+		positionValue: Math.round(raw.positionValue * weights.positionValue),
+		economyValue: Math.round(raw.economyValue * weights.economyValue),
+		riskValue: Math.round(raw.riskValue * weights.riskValue),
+		timingValue: Math.round(raw.timingValue * weights.timingValue),
+	};
 
-	// strategic
-	let score = 0;
-	if (turn >= 8 && turn <= 24) score += 18;
-	if (resLead >= 6) score += 10;
-	if (unit.type === "infantry") score += 8;
-	if (unit.type === "archer") score += 6;
-	return score;
+	const total =
+		weighted.combatValue +
+		weighted.positionValue +
+		weighted.economyValue +
+		weighted.riskValue +
+		weighted.timingValue;
+
+	return { weights, weighted, total };
+}
+
+function buildWhyThisMove(breakdown: MoveUtilityBreakdown): string {
+	const termSummary = [
+		`combat=${breakdown.termsWeighted.combatValue}`,
+		`position=${breakdown.termsWeighted.positionValue}`,
+		`economy=${breakdown.termsWeighted.economyValue}`,
+		`risk=${breakdown.termsWeighted.riskValue}`,
+		`timing=${breakdown.termsWeighted.timingValue}`,
+	].join(", ");
+	const triggerLabel = breakdown.phaseTriggers.join("+");
+	return `phase=${breakdown.phase}(${triggerLabel}) archetype=${breakdown.archetype} total=${breakdown.total}; ${termSummary}`;
+}
+
+function scoreMoveWithUtility(ctx: ScoringContext): MoveMetadata {
+	const baseActionBias = ctx.archetype.actionBias[ctx.move.action] ?? 0;
+	const phaseActionBias =
+		ctx.archetype.phaseActionBias[ctx.phase][ctx.move.action] ?? 0;
+	const promptBonus = scorePromptBias(ctx.move, ctx.promptIntents);
+	const policyAdjustments = scorePolicyAdjustments(ctx);
+
+	const rawTerms = {
+		combatValue: combatValue(ctx),
+		positionValue: positionValue(ctx),
+		economyValue: economyValue(ctx),
+		riskValue: riskValue(ctx),
+		timingValue: timingValue(ctx),
+	};
+
+	const weighted = buildWeightedTerms(rawTerms, ctx.archetype, ctx.phase);
+	const total =
+		baseActionBias +
+		phaseActionBias +
+		promptBonus +
+		policyAdjustments +
+		weighted.total;
+
+	const breakdown: MoveUtilityBreakdown = {
+		archetype: ctx.archetype.name,
+		phase: ctx.phase,
+		phaseTriggers: ctx.phaseTriggers,
+		baseActionBias,
+		phaseActionBias,
+		promptBonus,
+		policyAdjustments,
+		termsRaw: rawTerms,
+		termWeights: weighted.weights,
+		termsWeighted: weighted.weighted,
+		total,
+	};
+
+	return {
+		whyThisMove: buildWhyThisMove(breakdown),
+		breakdown,
+	};
+}
+
+function withMetadata(move: Move, metadata: MoveMetadata): Move {
+	return {
+		...(move as Move & {
+			reasoning?: string;
+			metadata?: MoveMetadata;
+		}),
+		reasoning: metadata.whyThisMove,
+		metadata,
+	} as unknown as Move;
 }
 
 /**
  * Create a mock LLM bot that simulates prompt-driven strategy selection.
  *
- * This is key for testing game balance: by varying the prompt instructions
- * and strategies across thousands of matches, we can detect whether any
- * single strategy dominates or whether diverse approaches are viable.
+ * Strategy compatibility:
+ * - aggressive -> timing_push
+ * - defensive -> turtle_boom
+ * - strategic -> map_control
+ * - random stays random
  */
 export function makeMockLlmBot(id: string, config: MockLlmConfig = {}): Bot {
 	let fileConfig: PromptFileConfig | null = null;
@@ -410,48 +582,105 @@ export function makeMockLlmBot(id: string, config: MockLlmConfig = {}): Bot {
 		fileConfig = loadPromptFromFile(config.file);
 	}
 
-	const effectiveStrategy =
-		config.strategy ?? fileConfig?.strategy ?? "strategic";
+	const strategy = config.strategy ?? fileConfig?.strategy ?? "strategic";
 	const effectiveInline = config.inline ?? fileConfig?.inline;
 	const promptIntents = parsePromptIntents(effectiveInline);
 	const promptTag = effectiveInline?.trim().length ? "custom" : "default";
+
+	const mappedArchetype = mapStrategyToArchetype(strategy);
+	const effectiveArchetype =
+		config.archetype ??
+		fileConfig?.archetype ??
+		(mappedArchetype
+			? inferArchetypeFromIntents(mappedArchetype, promptIntents)
+			: null);
 
 	return {
 		id,
 		name:
 			fileConfig?.botId ??
-			`MockLLM[strategy=${effectiveStrategy},prompt=${promptTag}]`,
+			`MockLLM[strategy=${strategy},archetype=${effectiveArchetype ?? "random"},prompt=${promptTag}]`,
 		chooseMove: async ({ legalMoves, rng, state, turn }) => {
-			if (effectiveStrategy === "random") {
-				return pickOne(legalMoves, rng);
+			if (strategy === "random" || !effectiveArchetype) {
+				const randomMove = pickOne(legalMoves, rng);
+				return withMetadata(randomMove, {
+					whyThisMove:
+						"phase=midgame(default) archetype=random total=0; random_pick",
+					breakdown: {
+						archetype: "random",
+						phase: "midgame",
+						phaseTriggers: ["random_strategy"],
+						baseActionBias: 0,
+						phaseActionBias: 0,
+						promptBonus: 0,
+						policyAdjustments: 0,
+						termsRaw: {
+							combatValue: 0,
+							positionValue: 0,
+							economyValue: 0,
+							riskValue: 0,
+							timingValue: 0,
+						},
+						termWeights: {
+							combatValue: 0,
+							positionValue: 0,
+							economyValue: 0,
+							riskValue: 0,
+							timingValue: 0,
+						},
+						termsWeighted: {
+							combatValue: 0,
+							positionValue: 0,
+							economyValue: 0,
+							riskValue: 0,
+							timingValue: 0,
+						},
+						total: 0,
+					},
+				});
 			}
+
 			const side = inferSide(state, id);
+			const hasLegalAttack = legalMoves.some(
+				(move) => move.action === "attack",
+			);
 			const hasPlayableAlternatives = legalMoves.some(
 				(move) => move.action !== "end_turn" && move.action !== "pass",
 			);
+			const { phase, triggers } = resolvePhase({
+				state,
+				side,
+				turn,
+				hasLegalAttack,
+			});
+			const archetype = MOCK_LLM_ARCHETYPES[effectiveArchetype];
 
 			let bestScore = Number.NEGATIVE_INFINITY;
-			let bestMoves: Move[] = [];
+			let bestMoves: MoveCandidate[] = [];
 
 			for (const move of legalMoves) {
-				const score = scoreMoveForStrategy(
+				const metadata = scoreMoveWithUtility({
 					move,
 					state,
 					side,
-					effectiveStrategy,
+					archetype,
+					phase,
+					phaseTriggers: triggers,
 					turn,
 					promptIntents,
 					hasPlayableAlternatives,
-				);
-				if (score > bestScore) {
-					bestScore = score;
-					bestMoves = [move];
-				} else if (score === bestScore) {
-					bestMoves.push(move);
+					hasLegalAttack,
+				});
+				if (metadata.breakdown.total > bestScore) {
+					bestScore = metadata.breakdown.total;
+					bestMoves = [{ move, metadata }];
+				} else if (metadata.breakdown.total === bestScore) {
+					bestMoves.push({ move, metadata });
 				}
 			}
 
-			return pickOne(bestMoves.length > 0 ? bestMoves : legalMoves, rng);
+			const selected = pickOne(bestMoves, rng);
+			return withMetadata(selected.move, selected.metadata);
 		},
 	};
 }

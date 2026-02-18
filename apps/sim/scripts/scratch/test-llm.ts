@@ -5,7 +5,7 @@ const client = new OpenAI({
 	baseURL: "https://openrouter.ai/api/v1",
 });
 
-async function test() {
+async function run() {
 	try {
 		const completion = await client.chat.completions.create({
 			model: "arcee-ai/trinity-large-preview:free",
@@ -20,9 +20,9 @@ async function test() {
 			max_tokens: 100,
 		});
 		console.log("Response:", JSON.stringify(completion, null, 2));
-	} catch (e) {
-		console.error("Error:", e);
+	} catch (error) {
+		console.error("Error:", error);
 	}
 }
 
-test();
+run();

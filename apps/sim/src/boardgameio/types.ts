@@ -10,7 +10,10 @@ export type ScenarioName =
 	| "all_archer"
 	| "infantry_archer"
 	| "cavalry_archer"
-	| "infantry_cavalry";
+	| "infantry_cavalry"
+	| "high_ground_clash"
+	| "forest_chokepoints"
+	| "resource_race";
 
 export type HarnessMode = "legacy" | "boardgameio";
 
@@ -85,6 +88,10 @@ export interface TurnArtifact {
 	prompt?: string;
 	rawOutput?: string;
 	model?: string;
+	declaredPlan?: string;
+	powerSpikeTriggered?: boolean;
+	swingEvent?: string;
+	whyThisMove?: string;
 	commandAttempts: CommandAttempt[];
 	metricsV2?: TurnMetricsV2;
 }

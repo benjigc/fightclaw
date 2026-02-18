@@ -1,4 +1,4 @@
-import { parseLlmJsonish } from "./src/bots/llmBot";
+import { parseLlmJsonish } from "../../src/bots/llmBot";
 
 const testCases = [
 	'{ "moveIndex": 12, "reasoning": "foo" }',
@@ -7,8 +7,8 @@ const testCases = [
 	"moveIndex=7\nreasoning: because",
 ];
 
-for (const test of testCases) {
-	console.log("Input:", test.substring(0, 50) + "...");
-	console.log("Parsed:", parseLlmJsonish(test));
+for (const input of testCases) {
+	console.log("Input:", `${input.slice(0, 50)}...`);
+	console.log("Parsed:", parseLlmJsonish(input));
 	console.log("---");
 }

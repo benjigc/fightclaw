@@ -18,6 +18,15 @@ const DEFAULT_LLM_TIMEOUT_MS = 35_000;
 const DEFAULT_LLM_MAX_RETRIES = 3;
 const DEFAULT_LLM_RETRY_BASE_MS = 1_000;
 const DEFAULT_LLM_MAX_TOKENS = 320;
+const LATE_MATCH_TURN = 60;
+const VERY_LATE_MATCH_TURN = 90;
+const MIN_SAFE_FORCED_ATTACK_SCORE = -8;
+
+export type LoopState = {
+	noAttackStreak: number;
+	noProgressStreak: number;
+	noRecruitStreak: number;
+};
 
 export interface LlmBotConfig {
 	// e.g. "anthropic/claude-3.5-haiku", "openai/gpt-4o-mini"
@@ -70,6 +79,9 @@ export function makeLlmBot(
 
 	let turnCount = 0;
 	let previousSeenState: MatchState | undefined;
+	let noAttackStreak = 0;
+	let noProgressStreak = 0;
+	let noRecruitStreak = 0;
 
 	return {
 		id,
@@ -85,7 +97,15 @@ export function makeLlmBot(
 				ctx,
 				turnCount,
 				previousSeenState,
+				{
+					noAttackStreak,
+					noProgressStreak,
+					noRecruitStreak,
+				},
 			);
+			noAttackStreak = result.hadAttack ? 0 : noAttackStreak + 1;
+			noRecruitStreak = result.hadRecruit ? 0 : noRecruitStreak + 1;
+			noProgressStreak = result.progressObserved ? 0 : noProgressStreak + 1;
 			turnCount++;
 			previousSeenState = structuredClone(ctx.state);
 			return result.moves;
@@ -98,7 +118,15 @@ export function makeLlmBot(
 				ctx,
 				turnCount,
 				previousSeenState,
+				{
+					noAttackStreak,
+					noProgressStreak,
+					noRecruitStreak,
+				},
 			);
+			noAttackStreak = result.hadAttack ? 0 : noAttackStreak + 1;
+			noRecruitStreak = result.hadRecruit ? 0 : noRecruitStreak + 1;
+			noProgressStreak = result.progressObserved ? 0 : noProgressStreak + 1;
 			turnCount++;
 			previousSeenState = structuredClone(ctx.state);
 			return {
@@ -123,10 +151,14 @@ async function chooseTurnDetailed(
 	},
 	turnCount: number,
 	previousSeenState?: MatchState,
+	loopState?: LoopState,
 ): Promise<{
 	moves: Move[];
 	prompt: string;
 	rawOutput: string;
+	hadAttack: boolean;
+	hadRecruit: boolean;
+	progressObserved: boolean;
 }> {
 	const { state, legalMoves, turn } = ctx;
 
@@ -139,10 +171,11 @@ async function chooseTurnDetailed(
 		? buildTurnDelta(previousSeenState, state, side)
 		: undefined;
 	const tacticalSummary = buildTacticalSummary(state, side, legalMoves);
+	const policyHints = buildLoopPolicyHints(loopState, turn);
 	const system =
 		turnCount % 3 === 0
-			? buildFullSystemPrompt(side, state, config.systemPrompt)
-			: buildShortSystemPrompt(side, config.systemPrompt);
+			? buildFullSystemPrompt(side, state, config.systemPrompt, policyHints)
+			: buildShortSystemPrompt(side, config.systemPrompt, policyHints);
 	const user = buildCompactUserMessage(
 		state,
 		side,
@@ -208,11 +241,14 @@ async function chooseTurnDetailed(
 			responsePreview: "",
 			apiError,
 		});
-		const fallback = pickFallbackMove(legalMoves, ctx.rng);
+		const fallback = pickFallbackMove(legalMoves, state, side);
 		return {
 			moves: [fallback],
 			prompt: fullPrompt,
 			rawOutput: "",
+			hadAttack: false,
+			hadRecruit: false,
+			progressObserved: false,
 		};
 	}
 
@@ -249,10 +285,33 @@ async function chooseTurnDetailed(
 		currentLegalMoves = Engine.listLegalMoves(simulatedState);
 	}
 
+	const antiLoopMoves = applyLoopPressurePolicy(moves, {
+		state,
+		side,
+		legalMoves,
+		turn,
+		loopState,
+	});
+	moves.splice(0, moves.length, ...antiLoopMoves);
+
 	// If no valid commands parsed, fall back to end_turn
 	if (moves.length === 0) {
-		moves.push(pickFallbackMove(legalMoves, ctx.rng));
+		moves.push(pickFallbackMove(legalMoves, state, side));
 	}
+
+	const deltaForProgress =
+		previousSeenState != null
+			? buildTurnDelta(previousSeenState, state, side)
+			: undefined;
+	const progressObserved =
+		deltaForProgress != null
+			? deltaForProgress.ownUnitDelta !== 0 ||
+				deltaForProgress.enemyUnitDelta !== 0 ||
+				deltaForProgress.ownHpDelta !== 0 ||
+				deltaForProgress.enemyHpDelta !== 0 ||
+				deltaForProgress.ownVpDelta !== 0 ||
+				deltaForProgress.enemyVpDelta !== 0
+			: false;
 
 	const commandsMatched = moves.length;
 	const commandsSkipped = parsed.commands.length - commandsMatched;
@@ -281,6 +340,9 @@ async function chooseTurnDetailed(
 		moves,
 		prompt: fullPrompt,
 		rawOutput: content,
+		hadAttack: moves.some((move) => move.action === "attack"),
+		hadRecruit: moves.some((move) => move.action === "recruit"),
+		progressObserved,
 	};
 }
 
@@ -328,6 +390,7 @@ function buildFullSystemPrompt(
 	side: "A" | "B",
 	state: MatchState,
 	userStrategy?: string,
+	policyHints: string[] = [],
 ): string {
 	const ownStrongholdHex = findStrongholdHex(state, side);
 	const enemySide = side === "A" ? "B" : "A";
@@ -356,14 +419,18 @@ function buildFullSystemPrompt(
 		"",
 		strategy,
 		"",
+		...(policyHints.length > 0
+			? ["ANTI_LOOP_RULES:", ...policyHints.map((line) => `  - ${line}`), ""]
+			: []),
 		"Return at most 5 commands. Always include end_turn as the final command if actions remain.",
-		"Respond with commands only. Optional reasoning after --- separator.",
+		"STRICT OUTPUT: commands only, one per line. No prose, no bullets, no numbering, no explanations, no separator.",
 	].join("\n");
 }
 
 function buildShortSystemPrompt(
 	side: "A" | "B",
 	userStrategy?: string,
+	policyHints: string[] = [],
 ): string {
 	const strategy =
 		userStrategy?.trim() ||
@@ -373,9 +440,48 @@ function buildShortSystemPrompt(
 		"Use only valid CLI commands from LEGAL_MOVES.",
 		"Commands execute sequentially; legality changes after each command.",
 		`Strategy: ${strategy}`,
+		...(policyHints.length > 0 ? [`Anti-loop: ${policyHints.join(" ")}`] : []),
 		"Return at most 5 commands and end with end_turn.",
-		"Optional reasoning after --- separator.",
+		"STRICT OUTPUT: commands only, one per line. No prose, no bullets, no numbering, no explanations, no separator.",
 	].join(" ");
+}
+
+function buildLoopPolicyHints(loopState?: LoopState, turn = 0): string[] {
+	const hints: string[] = [];
+	const noAttack = loopState?.noAttackStreak ?? 0;
+	const noProgress = loopState?.noProgressStreak ?? 0;
+	const noRecruit = loopState?.noRecruitStreak ?? 0;
+
+	hints.push(
+		"If ATTACKS are listed in LEGAL_MOVES, include at least one attack before end_turn.",
+	);
+	hints.push(
+		"Do not output recruit-only turns repeatedly; recruit only when it changes immediate tactical pressure.",
+	);
+	if (noAttack >= 2 || noProgress >= 2) {
+		hints.push(
+			"Stall risk is high: prioritize direct combat over repositioning this turn.",
+		);
+	}
+	if (noProgress >= 3) {
+		hints.push(
+			"If no favorable attack exists, make at least one move that reduces distance to the enemy stronghold.",
+		);
+	}
+	if (noRecruit >= 2) {
+		hints.push(
+			"Do not recruit again this turn unless there are no legal attacks and no advancing moves.",
+		);
+	}
+	if (
+		turn >= LATE_MATCH_TURN &&
+		(noAttack >= 1 || noProgress >= 1 || noRecruit >= 1)
+	) {
+		hints.push(
+			"Late game: avoid low-impact recruit/fortify cycles; choose attack or objective advance.",
+		);
+	}
+	return hints;
 }
 
 // ---------------------------------------------------------------------------
@@ -495,18 +601,309 @@ function buildTacticalSummary(
 	return ranked;
 }
 
-function pickFallbackMove(legalMoves: Move[], rng: () => number): Move {
-	const attacks = legalMoves.filter((m) => m.action === "attack");
-	if (attacks.length > 0) {
-		return attacks[Math.floor(rng() * attacks.length)] as Move;
+function pickFallbackMove(
+	legalMoves: Move[],
+	state?: MatchState,
+	side?: "A" | "B",
+): Move {
+	const attacks = legalMoves.filter(
+		(move): move is Extract<Move, { action: "attack" }> =>
+			move.action === "attack",
+	);
+	if (attacks.length > 0 && state && side) {
+		const scored = pickBestAttackWithScore(attacks, state, side);
+		if (scored) return scored.move;
 	}
-	const moves = legalMoves.filter((m) => m.action === "move");
-	if (moves.length > 0) {
-		return moves[Math.floor(rng() * moves.length)] as Move;
+	if (attacks.length > 0) return attacks[0] as Move;
+
+	if (state && side) {
+		const bestAdvance = pickBestObjectiveAdvanceMove(legalMoves, state, side);
+		if (bestAdvance) return bestAdvance;
 	}
-	const recruit = legalMoves.find((m) => m.action === "recruit");
-	if (recruit) return recruit;
+	const firstMove = legalMoves.find((move) => move.action === "move");
+	if (firstMove) return firstMove;
+
+	const recruitInfantry = legalMoves.find(
+		(move): move is Extract<Move, { action: "recruit" }> =>
+			move.action === "recruit" && move.unitType === "infantry",
+	);
+	if (recruitInfantry) return recruitInfantry;
+	const recruitAny = legalMoves.find((move) => move.action === "recruit");
+	if (recruitAny) return recruitAny;
+
+	const fortify = legalMoves.find((move) => move.action === "fortify");
+	if (fortify) return fortify;
+	const upgrade = legalMoves.find((move) => move.action === "upgrade");
+	if (upgrade) return upgrade;
+	const endTurn = legalMoves.find((move) => move.action === "end_turn");
+	if (endTurn) return endTurn;
 	return { action: "end_turn" };
+}
+
+export function applyLoopPressurePolicy(
+	moves: Move[],
+	opts: {
+		state: MatchState;
+		side: "A" | "B";
+		legalMoves: Move[];
+		turn: number;
+		loopState?: LoopState;
+	},
+): Move[] {
+	const { state, side, legalMoves, turn, loopState } = opts;
+	const legalAttacks = legalMoves.filter(
+		(move): move is Extract<Move, { action: "attack" }> =>
+			move.action === "attack",
+	);
+
+	if (moves.some((move) => move.action === "attack")) {
+		return moves;
+	}
+
+	const noAttack = loopState?.noAttackStreak ?? 0;
+	const noProgress = loopState?.noProgressStreak ?? 0;
+	const noRecruit = loopState?.noRecruitStreak ?? 0;
+	const lateGame = turn >= LATE_MATCH_TURN;
+	const pressure = computeLoopPressure(loopState, turn);
+	const hasRecruit = moves.some((move) => move.action === "recruit");
+	const lowImpactLoopTurn = isLowImpactLoopTurn(moves, state, side);
+	const shouldPreferCombat =
+		noAttack >= 2 ||
+		noProgress >= 2 ||
+		(lateGame && (noAttack >= 1 || noProgress >= 1));
+	const shouldBlockRecruitLoop =
+		noRecruit >= 2 ||
+		noProgress >= 3 ||
+		(lateGame && noRecruit >= 1 && noAttack >= 1);
+	const desperateMode =
+		pressure >= 6 || noProgress >= 5 || turn >= VERY_LATE_MATCH_TURN + 20;
+
+	const bestAttack =
+		legalAttacks.length > 0
+			? pickBestAttackWithScore(legalAttacks, state, side)
+			: undefined;
+	const canForceAttack =
+		bestAttack != null &&
+		(bestAttack.score >= MIN_SAFE_FORCED_ATTACK_SCORE || desperateMode);
+
+	if (
+		canForceAttack &&
+		(shouldPreferCombat ||
+			(shouldBlockRecruitLoop && hasRecruit) ||
+			(lowImpactLoopTurn && pressure >= 2))
+	) {
+		return [bestAttack.move, { action: "end_turn" }];
+	}
+
+	const bestAdvance = pickBestObjectiveAdvanceMove(legalMoves, state, side);
+	if (
+		bestAdvance &&
+		(shouldBlockRecruitLoop || (lowImpactLoopTurn && pressure >= 2))
+	) {
+		return [bestAdvance, { action: "end_turn" }];
+	}
+
+	return moves;
+}
+
+function computeLoopPressure(
+	loopState: LoopState | undefined,
+	turn: number,
+): number {
+	const noAttack = loopState?.noAttackStreak ?? 0;
+	const noProgress = loopState?.noProgressStreak ?? 0;
+	const noRecruit = loopState?.noRecruitStreak ?? 0;
+	let pressure = 0;
+
+	if (noAttack >= 2) pressure += 2;
+	if (noAttack >= 4) pressure += 1;
+	if (noProgress >= 2) pressure += 2;
+	if (noProgress >= 4) pressure += 2;
+	if (noRecruit >= 3) pressure += 1;
+	if (turn >= LATE_MATCH_TURN) pressure += 1;
+	if (turn >= VERY_LATE_MATCH_TURN) pressure += 1;
+	if (turn >= LATE_MATCH_TURN && (noAttack >= 1 || noProgress >= 1)) {
+		pressure += 1;
+	}
+
+	return pressure;
+}
+
+function isLowImpactLoopTurn(
+	moves: Move[],
+	state: MatchState,
+	side: "A" | "B",
+): boolean {
+	let sawNonEndTurn = false;
+	for (const move of moves) {
+		if (move.action === "end_turn") continue;
+		sawNonEndTurn = true;
+		if (move.action === "attack") return false;
+		if (move.action === "move") {
+			if (scoreObjectiveAdvanceMove(move, state, side) > 0) {
+				return false;
+			}
+			continue;
+		}
+		if (move.action === "recruit" || move.action === "fortify") {
+			continue;
+		}
+		return false;
+	}
+	return sawNonEndTurn;
+}
+
+function pickBestObjectiveAdvanceMove(
+	legalMoves: Move[],
+	state: MatchState,
+	side: "A" | "B",
+): Extract<Move, { action: "move" }> | undefined {
+	let bestMove: Extract<Move, { action: "move" }> | undefined;
+	let bestScore = 0;
+
+	for (const move of legalMoves) {
+		if (move.action !== "move") continue;
+		const score = scoreObjectiveAdvanceMove(move, state, side);
+		if (score > bestScore) {
+			bestMove = move;
+			bestScore = score;
+		}
+	}
+
+	return bestMove;
+}
+
+function scoreObjectiveAdvanceMove(
+	move: Extract<Move, { action: "move" }>,
+	state: MatchState,
+	side: "A" | "B",
+): number {
+	const enemySide = side === "A" ? "B" : "A";
+	const enemyStrongholdHex = findStrongholdHex(state, enemySide);
+	const ownById = new Map(
+		state.players[side].units.map((unit) => [unit.id, unit]),
+	);
+	const attacker = ownById.get(move.unitId);
+	if (!attacker) return Number.NEGATIVE_INFINITY;
+
+	const startDist = hexDistance(attacker.position, enemyStrongholdHex);
+	const endDist = hexDistance(move.to, enemyStrongholdHex);
+	if (!Number.isFinite(startDist) || !Number.isFinite(endDist)) {
+		return Number.NEGATIVE_INFINITY;
+	}
+
+	const byHex = new Map(state.board.map((hex) => [hex.id, hex]));
+	const destination = byHex.get(move.to);
+	const towardStronghold = (startDist - endDist) * 6;
+	const enemyControlPressure = destination?.controlledBy === enemySide ? 4 : 0;
+	const objectiveTerrainBonus =
+		destination?.type === "crown"
+			? 6
+			: destination?.type === "gold_mine" || destination?.type === "lumber_camp"
+				? 2
+				: 0;
+	const strongholdCaptureBonus = move.to === enemyStrongholdHex ? 45 : 0;
+
+	return (
+		towardStronghold +
+		enemyControlPressure +
+		objectiveTerrainBonus +
+		strongholdCaptureBonus
+	);
+}
+
+function pickBestAttackWithScore(
+	attacks: Extract<Move, { action: "attack" }>[],
+	state: MatchState,
+	side: "A" | "B",
+): { move: Extract<Move, { action: "attack" }>; score: number } | undefined {
+	let best:
+		| { move: Extract<Move, { action: "attack" }>; score: number }
+		| undefined;
+
+	for (const attack of attacks) {
+		const score = scoreAttackMove(attack, state, side);
+		if (!best || score > best.score) {
+			best = { move: attack, score };
+		}
+	}
+
+	return best;
+}
+
+function scoreAttackMove(
+	attack: Extract<Move, { action: "attack" }>,
+	state: MatchState,
+	side: "A" | "B",
+): number {
+	const enemySide = side === "A" ? "B" : "A";
+	const ownById = new Map(
+		state.players[side].units.map((unit) => [unit.id, unit]),
+	);
+	const enemies = state.players[enemySide].units;
+	const targets = enemies.filter((enemy) => enemy.position === attack.target);
+	const attacker = ownById.get(attack.unitId);
+	const targetHex = state.board.find((hex) => hex.id === attack.target);
+	const enemyStrongholdType = side === "A" ? "stronghold_b" : "stronghold_a";
+
+	const finishers = targets.filter((target) => target.hp <= 1).length;
+	const damaged = targets.filter((target) => target.hp < target.maxHp).length;
+	const fortifiedCount = targets.filter((target) => target.isFortified).length;
+	const attackerLowHpPenalty = attacker
+		? attacker.hp <= 1
+			? 14
+			: attacker.hp === 2
+				? 6
+				: 0
+		: 0;
+	const stackRiskPenalty =
+		targets.length >= 2 && (attacker?.hp ?? 3) <= 2 ? 12 : 0;
+	const freshTargetPenalty =
+		targets.length > 0 && targets.every((target) => target.hp === target.maxHp)
+			? 4
+			: 0;
+	const objectiveBonus = targetHex?.type === enemyStrongholdType ? 28 : 0;
+	const controlBonus = targetHex?.controlledBy === enemySide ? 4 : 0;
+
+	return (
+		finishers * 36 +
+		damaged * 12 +
+		targets.length * 6 +
+		objectiveBonus +
+		controlBonus -
+		fortifiedCount * 8 -
+		attackerLowHpPenalty -
+		stackRiskPenalty -
+		freshTargetPenalty
+	);
+}
+
+function parseHexId(hexId: string): { row: number; col: number } | undefined {
+	const match = /^([A-Za-z])(\d+)$/.exec(hexId);
+	if (!match) return undefined;
+	const row = match[1]!.toUpperCase().charCodeAt(0) - 65;
+	const col = Number.parseInt(match[2] ?? "", 10) - 1;
+	if (!Number.isFinite(col) || col < 0 || row < 0) return undefined;
+	return { row, col };
+}
+
+function hexDistance(fromHex: string, toHex: string): number {
+	const from = parseHexId(fromHex);
+	const to = parseHexId(toHex);
+	if (!from || !to) return Number.POSITIVE_INFINITY;
+
+	const fromQ = from.col - Math.floor((from.row - (from.row & 1)) / 2);
+	const fromR = from.row;
+	const fromS = -fromQ - fromR;
+	const toQ = to.col - Math.floor((to.row - (to.row & 1)) / 2);
+	const toR = to.row;
+	const toS = -toQ - toR;
+
+	return Math.max(
+		Math.abs(fromQ - toQ),
+		Math.abs(fromR - toR),
+		Math.abs(fromS - toS),
+	);
 }
 
 // ---------------------------------------------------------------------------

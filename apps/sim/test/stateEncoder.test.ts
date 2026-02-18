@@ -43,6 +43,16 @@ describe("stateEncoder", () => {
 		expect(encoded).toContain("end_turn");
 	});
 
+	test("encodeState includes contested nearby terrain context", () => {
+		const {
+			createCombatScenario,
+		} = require("../src/scenarios/combatScenarios");
+		const state = createCombatScenario(1, ["a", "b"], "high_ground_clash");
+		const encoded = encodeState(state, "A");
+		expect(encoded).toContain("TERRAIN_CONTESTED_NEARBY:");
+		expect(encoded).toContain("D11=high_ground");
+	});
+
 	test("encodeLegalMoves categorizes by action type", () => {
 		// Move A-1 off stronghold B2 so recruit becomes available
 		let state = Engine.createInitialState(1, ["a", "b"]);

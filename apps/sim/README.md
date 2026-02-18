@@ -50,6 +50,16 @@ Mass simulation:
 pnpm -C apps/sim exec tsx src/cli.ts mass --games 10000 --parallel 4 --output ./results --harness boardgameio
 ```
 
+## Scratch probes
+
+Ad-hoc diagnostics scripts live under `scripts/scratch/`:
+
+```bash
+pnpm -C apps/sim run scratch:test-game
+pnpm -C apps/sim run scratch:test-llm
+pnpm -C apps/sim run scratch:test-parse
+```
+
 ## Boardgame harness flags
 
 Use these with `single`, `tourney`, or `mass`:

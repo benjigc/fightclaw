@@ -191,9 +191,10 @@ async function playMatchLegacy(opts: {
 					continue; // skip this move
 				}
 
-				const result = Engine.applyMove(state, batchMove);
+				const engineBatchMove = stripReasoning(batchMove);
+				const result = Engine.applyMove(state, engineBatchMove);
 				engineEvents.push(...result.engineEvents);
-				moves.push(batchMove);
+				moves.push(engineBatchMove);
 				if (result.ok) {
 					state = result.state;
 				}
@@ -274,9 +275,10 @@ async function playMatchLegacy(opts: {
 			move = legalMoves[Math.floor(rng() * legalMoves.length)] as Move;
 		}
 
-		const result = Engine.applyMove(state, move);
+		const engineMove = stripReasoning(move);
+		const result = Engine.applyMove(state, engineMove);
 		engineEvents.push(...result.engineEvents);
-		moves.push(move);
+		moves.push(engineMove);
 		if (!result.ok) {
 			illegalMoves++;
 			if (!opts.autofixIllegal) {
@@ -298,9 +300,9 @@ async function playMatchLegacy(opts: {
 			const fallback = legalMoves[
 				Math.floor(rng() * legalMoves.length)
 			] as Move;
-			const fallbackResult = Engine.applyMove(state, fallback);
+			const fallbackResult = Engine.applyMove(state, stripReasoning(fallback));
 			engineEvents.push(...fallbackResult.engineEvents);
-			moves.push(fallback);
+			moves.push(stripReasoning(fallback));
 			if (fallbackResult.ok) {
 				state = fallbackResult.state;
 			} else {
@@ -387,7 +389,14 @@ export function replayMatch(log: MatchLog): {
 }
 
 function stripReasoning(m: Move): Move {
-	const { reasoning: _, ...rest } = m as Move & { reasoning?: string };
+	const {
+		reasoning: _,
+		metadata: __,
+		...rest
+	} = m as Move & {
+		reasoning?: string;
+		metadata?: unknown;
+	};
 	return rest as Move;
 }
 

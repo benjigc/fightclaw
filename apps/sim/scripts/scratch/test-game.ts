@@ -1,5 +1,5 @@
-import { makeLlmBot } from "./src/bots/llmBot";
-import { Engine } from "./src/engineAdapter";
+import { makeLlmBot } from "../../src/bots/llmBot";
+import { Engine } from "../../src/engineAdapter";
 
 const bot = makeLlmBot("P1", {
 	model: "arcee-ai/trinity-large-preview:free",
@@ -8,7 +8,7 @@ const bot = makeLlmBot("P1", {
 	delayMs: 0,
 });
 
-async function test() {
+async function run() {
 	const state = Engine.createInitialState(1, ["P1", "P2"]);
 	const legalMoves = Engine.listLegalMoves(state);
 
@@ -25,4 +25,4 @@ async function test() {
 	console.log("Bot chose:", move);
 }
 
-test().catch(console.error);
+run().catch(console.error);

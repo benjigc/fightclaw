@@ -112,6 +112,31 @@ export class ArtifactBuilder {
 		turn.metricsV2 = metrics;
 	}
 
+	setTurnExplainability(
+		turnIdx: number,
+		explainability: Partial<
+			Pick<
+				TurnArtifact,
+				"declaredPlan" | "powerSpikeTriggered" | "swingEvent" | "whyThisMove"
+			>
+		>,
+	) {
+		const turn = this.artifact.turns[turnIdx];
+		if (!turn) return;
+		if (explainability.declaredPlan !== undefined) {
+			turn.declaredPlan = explainability.declaredPlan;
+		}
+		if (explainability.powerSpikeTriggered !== undefined) {
+			turn.powerSpikeTriggered = explainability.powerSpikeTriggered;
+		}
+		if (explainability.swingEvent !== undefined) {
+			turn.swingEvent = explainability.swingEvent;
+		}
+		if (explainability.whyThisMove !== undefined) {
+			turn.whyThisMove = explainability.whyThisMove;
+		}
+	}
+
 	recordAcceptedMove(entry: MatchArtifact["acceptedMoves"][0]) {
 		this.artifact.acceptedMoves.push(entry);
 	}
