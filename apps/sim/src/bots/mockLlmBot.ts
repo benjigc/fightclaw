@@ -33,6 +33,11 @@ interface MoveMetadata {
 	breakdown: MoveUtilityBreakdown;
 }
 
+type MoveWithMetadata = Move & {
+	reasoning?: string;
+	metadata?: MoveMetadata;
+};
+
 interface MoveCandidate {
 	move: Move;
 	metadata: MoveMetadata;
@@ -556,15 +561,12 @@ function scoreMoveWithUtility(ctx: ScoringContext): MoveMetadata {
 	};
 }
 
-function withMetadata(move: Move, metadata: MoveMetadata): Move {
+function withMetadata(move: Move, metadata: MoveMetadata): MoveWithMetadata {
 	return {
-		...(move as Move & {
-			reasoning?: string;
-			metadata?: MoveMetadata;
-		}),
+		...move,
 		reasoning: metadata.whyThisMove,
 		metadata,
-	} as unknown as Move;
+	};
 }
 
 /**

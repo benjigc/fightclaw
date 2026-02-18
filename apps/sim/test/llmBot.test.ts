@@ -45,9 +45,12 @@ describe("llmBot", () => {
 			legalMoves.find((move) => move.action === "recruit") ??
 			legalMoves.find((move) => move.action === "fortify");
 		expect(lowImpact).toBeTruthy();
+		if (!lowImpact) {
+			throw new Error("expected recruit or fortify legal move");
+		}
 
 		const adjusted = applyLoopPressurePolicy(
-			[lowImpact as Move, { action: "end_turn" }],
+			[lowImpact, { action: "end_turn" }],
 			{
 				state,
 				side: "A",
@@ -92,9 +95,12 @@ describe("llmBot", () => {
 			legalMoves.find((move) => move.action === "recruit") ??
 			legalMoves.find((move) => move.action === "fortify");
 		expect(lowImpact).toBeTruthy();
+		if (!lowImpact) {
+			throw new Error("expected recruit or fortify legal move");
+		}
 
 		const adjusted = applyLoopPressurePolicy(
-			[lowImpact as Move, { action: "end_turn" }],
+			[lowImpact, { action: "end_turn" }],
 			{
 				state,
 				side: "A",
@@ -119,9 +125,12 @@ describe("llmBot", () => {
 			legalMoves.find((move) => move.action === "recruit") ??
 			legalMoves.find((move) => move.action === "fortify");
 		expect(lowImpact).toBeTruthy();
+		if (!lowImpact) {
+			throw new Error("expected recruit or fortify legal move");
+		}
 
 		const adjusted = applyLoopPressurePolicy(
-			[lowImpact as Move, { action: "end_turn" }],
+			[lowImpact, { action: "end_turn" }],
 			{
 				state,
 				side: "A",

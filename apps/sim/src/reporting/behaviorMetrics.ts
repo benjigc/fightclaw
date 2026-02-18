@@ -306,11 +306,10 @@ function resolveArtifactsDir(input: string): string {
 	if (!existsSync(direct)) {
 		throw new Error(`Input path not found: ${direct}`);
 	}
-	const statPath = path.resolve(direct);
-	if (existsSync(path.join(statPath, "artifacts"))) {
-		return path.join(statPath, "artifacts");
+	if (existsSync(path.join(direct, "artifacts"))) {
+		return path.join(direct, "artifacts");
 	}
-	return statPath;
+	return direct;
 }
 
 export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
@@ -360,8 +359,23 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 	let turnsWithReasoningField = 0;
 
 	for (const file of files) {
-		const artifact = JSON.parse(readFileSync(file, "utf-8")) as Artifact;
-		illegalMoves += artifact.result?.illegalMoves ?? 0;
+		let artifact: Artifact;
+		try {
+			artifact = JSON.parse(readFileSync(file, "utf-8")) as Artifact;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(
+				`Failed to parse artifact JSON (${file}): ${message}. Skipping file.`,
+			);
+			continue;
+		}
+		const parsedIllegalMoves = artifact.result?.illegalMoves;
+		if (
+			typeof parsedIllegalMoves === "number" &&
+			Number.isFinite(parsedIllegalMoves)
+		) {
+			illegalMoves += parsedIllegalMoves;
+		}
 		let gameHasUpgrade = false;
 		let gameFirstUpgradeTurn: number | null = null;
 		let gameUpgradeCount = 0;
@@ -537,15 +551,16 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 				const afterEnemyHp = sumHp(after.enemyUnits);
 				const afterOwnHp = sumHp(after.ownUnits);
 				const enemyHpLoss = beforeEnemyHp - afterEnemyHp;
-				const ownHpLoss = beforeOwnHp - afterOwnHp;
+				const turnOwnHpLoss = beforeOwnHp - afterOwnHp;
 				const enemyUnitLoss =
 					before.enemyUnits.length - after.enemyUnits.length;
 				const ownUnitLoss = before.ownUnits.length - after.ownUnits.length;
 				const favorable =
-					enemyHpLoss > ownHpLoss || enemyUnitLoss > ownUnitLoss;
+					enemyHpLoss > turnOwnHpLoss || enemyUnitLoss > ownUnitLoss;
 				if (favorable) favorableTradeTurns++;
 
-				const setback = ownHpLoss > enemyHpLoss || ownUnitLoss > enemyUnitLoss;
+				const setback =
+					turnOwnHpLoss > enemyHpLoss || ownUnitLoss > enemyUnitLoss;
 				if (setback) {
 					setbackTurns++;
 					const side = before.side;

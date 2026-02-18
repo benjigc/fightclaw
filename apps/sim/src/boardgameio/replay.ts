@@ -10,8 +10,13 @@ export function replayBoardgameArtifact(artifact: MatchArtifact): ReplayResult {
 				artifact.seed,
 				artifact.participants,
 				artifact.scenario,
+				artifact.engineConfig,
 			)
-		: Engine.createInitialState(artifact.seed, artifact.participants);
+		: Engine.createInitialState(
+				artifact.seed,
+				artifact.participants,
+				artifact.engineConfig,
+			);
 
 	for (const entry of artifact.acceptedMoves) {
 		const preHash = hashState(state);

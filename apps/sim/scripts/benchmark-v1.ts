@@ -7,6 +7,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 type Scenario = "midfield" | "melee" | "all_infantry" | "all_cavalry";
 type Strategy = "strategic" | "defensive" | "aggressive";
@@ -172,12 +173,12 @@ function aggregateSummaries(laneDir: string): Aggregate {
 
 	aggregate.avgTurns =
 		aggregate.games > 0 ? weightedTurns / aggregate.games : 0;
-	for (const scenario of Object.keys(aggregate.byScenario)) {
-		const entry = aggregate.byScenario[scenario];
+	for (const [scenario, byScenario] of Object.entries(aggregate.byScenario)) {
 		aggregate.byScenario[scenario] = {
-			games: entry.games,
-			draws: entry.draws,
-			avgTurns: entry.games > 0 ? entry.avgTurns / entry.games : 0,
+			games: byScenario.games,
+			draws: byScenario.draws,
+			avgTurns:
+				byScenario.games > 0 ? byScenario.avgTurns / byScenario.games : 0,
 		};
 	}
 
@@ -205,7 +206,12 @@ function shouldSkipCompletedMatchup(
 }
 
 function main() {
-	const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
+	const repoRoot = path.resolve(
+		path.dirname(fileURLToPath(import.meta.url)),
+		"..",
+		"..",
+		"..",
+	);
 	const simDir = path.join(repoRoot, "apps", "sim");
 	const dryRun = hasFlag("--dryRun");
 	const withApi = hasFlag("--withApi");

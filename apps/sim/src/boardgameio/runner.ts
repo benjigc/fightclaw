@@ -201,6 +201,7 @@ export async function playMatchBoardgameIO(
 					continue;
 				}
 
+				engineEvents.push(...checked.engineEvents);
 				client.updatePlayerID(actingPlayerID);
 				client.moves.applyMove({
 					move,
@@ -271,6 +272,7 @@ export async function playMatchBoardgameIO(
 					});
 
 					if (checked.accepted) {
+						engineEvents.push(...checked.engineEvents);
 						client.updatePlayerID(actingPlayerID);
 						client.moves.applyMove({
 							move: forcedEndTurn,

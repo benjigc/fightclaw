@@ -225,7 +225,7 @@ async function chooseTurnDetailed(
 					);
 		content = completion.choices?.[0]?.message?.content ?? "";
 	} catch (e) {
-		apiError = e instanceof Error ? e.message : String(e);
+		apiError = formatRequestError(e);
 		getDiagnosticsCollector().logLlmCall({
 			timestamp: new Date().toISOString(),
 			botId,
@@ -933,6 +933,22 @@ function findStrongholdHex(state: MatchState, side: "A" | "B"): string {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
+}
+
+function formatRequestError(error: unknown): string {
+	if (error instanceof AggregateError) {
+		const details = error.errors
+			.map((entry) => formatRequestErrorEntry(entry))
+			.filter((entry) => entry.length > 0);
+		if (details.length === 0) return error.message;
+		return `${error.message}: ${details.join(" | ")}`;
+	}
+	return formatRequestErrorEntry(error);
+}
+
+function formatRequestErrorEntry(error: unknown): string {
+	if (error instanceof Error) return error.message;
+	return String(error);
 }
 
 async function withRetry<T>(

@@ -45,27 +45,19 @@ export const UnitToken = memo(function UnitToken({
 	const hpBarHeight = radius * 0.08;
 	const hpBarY = radius * 0.42;
 
-	// Lunge animation: compute offset toward target
-	const lungeX =
-		animState === "attacking" && lungeTarget
-			? (() => {
-					const dx = lungeTarget.x - x;
-					const dy = lungeTarget.y - y;
-					const dist = Math.sqrt(dx * dx + dy * dy);
-					const scale = Math.min(8, dist * 0.3) / (dist || 1);
-					return [x, x + dx * scale, x];
-				})()
-			: x;
-	const lungeY =
-		animState === "attacking" && lungeTarget
-			? (() => {
-					const dx = lungeTarget.x - x;
-					const dy = lungeTarget.y - y;
-					const dist = Math.sqrt(dx * dx + dy * dy);
-					const scale = Math.min(8, dist * 0.3) / (dist || 1);
-					return [y, y + dy * scale, y];
-				})()
-			: y;
+	const lungeOffsets = useMemo(() => {
+		if (animState !== "attacking" || !lungeTarget) return null;
+		const dx = lungeTarget.x - x;
+		const dy = lungeTarget.y - y;
+		const dist = Math.sqrt(dx * dx + dy * dy);
+		const scale = Math.min(8, dist * 0.3) / (dist || 1);
+		return {
+			x: [x, x + dx * scale, x],
+			y: [y, y + dy * scale, y],
+		};
+	}, [animState, lungeTarget, x, y]);
+	const lungeX = lungeOffsets?.x ?? x;
+	const lungeY = lungeOffsets?.y ?? y;
 
 	// Stable random offsets for death dissolve effect
 	const dissolveOffsets = useMemo(() => {
@@ -93,7 +85,7 @@ export const UnitToken = memo(function UnitToken({
 					: { x, y, scale: 1, opacity: 1 }
 			}
 			animate={
-				animState === "attacking" && lungeTarget
+				lungeOffsets
 					? { x: lungeX, y: lungeY, scale: 1, opacity: 1 }
 					: {
 							x,
@@ -108,7 +100,7 @@ export const UnitToken = memo(function UnitToken({
 					: { scale: 0, opacity: 0, transition: { duration: 0.25 } }
 			}
 			transition={
-				animState === "attacking" && lungeTarget
+				lungeOffsets
 					? {
 							x: { type: "tween", duration: 0.25, ease: "easeInOut" },
 							y: { type: "tween", duration: 0.25, ease: "easeInOut" },
@@ -131,40 +123,43 @@ export const UnitToken = memo(function UnitToken({
 		>
 			{/* ASCII art unit — dissolve individual chars when dying */}
 			{isDying && dissolveOffsets
-				? lines.flatMap((line, lineIdx) =>
-						line.split("").map((char, charIdx) => {
-							if (char === " ") return null;
-							const globalIdx = lineIdx * line.length + charIdx;
-							const charX = (charIdx - line.length / 2) * (fontSize * 0.6);
-							const charY = startY + lineIdx * lineHeight;
-							const offsets = dissolveOffsets[globalIdx];
-							if (!offsets) return null;
-							return (
-								<motion.text
-									key={`d-${unit.id}-${lineIdx}-${globalIdx}`}
-									initial={{ x: charX, y: charY, opacity: 1 }}
-									animate={{
-										x: charX + offsets.randX,
-										y: charY + offsets.randY,
-										opacity: 0,
-									}}
-									transition={{
-										duration: 0.4,
-										delay: globalIdx * 0.03,
-										ease: "easeOut",
-									}}
-									textAnchor="middle"
-									dominantBaseline="central"
-									fontFamily="monospace"
-									fontSize={fontSize}
-									fill={color.fill}
-									style={{ pointerEvents: "none" }}
-								>
-									{char}
-								</motion.text>
-							);
-						}),
-					)
+				? (() => {
+						let runningIdx = 0;
+						return lines.flatMap((line, lineIdx) =>
+							line.split("").map((char, charIdx) => {
+								const currentIdx = runningIdx++;
+								if (char === " ") return null;
+								const charX = (charIdx - line.length / 2) * (fontSize * 0.6);
+								const charY = startY + lineIdx * lineHeight;
+								const offsets = dissolveOffsets[currentIdx];
+								if (!offsets) return null;
+								return (
+									<motion.text
+										key={`d-${unit.id}-${lineIdx}-${currentIdx}`}
+										initial={{ x: charX, y: charY, opacity: 1 }}
+										animate={{
+											x: charX + offsets.randX,
+											y: charY + offsets.randY,
+											opacity: 0,
+										}}
+										transition={{
+											duration: 0.4,
+											delay: currentIdx * 0.03,
+											ease: "easeOut",
+										}}
+										textAnchor="middle"
+										dominantBaseline="central"
+										fontFamily="monospace"
+										fontSize={fontSize}
+										fill={color.fill}
+										style={{ pointerEvents: "none" }}
+									>
+										{char}
+									</motion.text>
+								);
+							}),
+						);
+					})()
 				: lines.map((line, i) => (
 						<text
 							key={line}

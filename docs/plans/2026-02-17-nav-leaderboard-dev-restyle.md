@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Shared Nav Bar in `__root.tsx`
+## Task 1: Shared Nav Bar in `__root.tsx`
 
 **Files:**
 - Modify: `apps/web/src/routes/__root.tsx`
@@ -187,7 +187,7 @@ git commit -m "feat(web): add shared terminal nav bar to all routes"
 
 ---
 
-### Task 2: Leaderboard Terminal Restyle
+## Task 2: Leaderboard Terminal Restyle
 
 **Files:**
 - Modify: `apps/web/src/routes/leaderboard.tsx`
@@ -400,7 +400,7 @@ git commit -m "feat(web): restyle leaderboard with terminal aesthetic"
 
 ---
 
-### Task 3: Dev Page — Spectator Layout with Dev Controls Panel
+## Task 3: Dev Page — Spectator Layout with Dev Controls Panel
 
 **Files:**
 - Modify: `apps/web/src/routes/dev.tsx`

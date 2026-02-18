@@ -1,6 +1,6 @@
 import { MoveSchema } from "@fightclaw/engine";
 import { Engine } from "../engineAdapter";
-import type { AgentId, MatchState, Move } from "../types";
+import type { AgentId, EngineEvent, MatchState, Move } from "../types";
 import type { MoveValidationMode } from "./types";
 
 export function createPlayerMap(players: [AgentId, AgentId]) {
@@ -39,7 +39,7 @@ export function applyEngineMoveChecked(opts: {
 	accepted: boolean;
 	nextState: MatchState;
 	rejectionReason?: string;
-	engineEventsCount: number;
+	engineEvents: EngineEvent[];
 } {
 	const engineMove = stripMoveAnnotations(opts.move);
 
@@ -48,7 +48,7 @@ export function applyEngineMoveChecked(opts: {
 			accepted: false,
 			nextState: opts.state,
 			rejectionReason: "invalid_move_schema",
-			engineEventsCount: 0,
+			engineEvents: [],
 		};
 	}
 
@@ -62,7 +62,7 @@ export function applyEngineMoveChecked(opts: {
 				accepted: false,
 				nextState: opts.state,
 				rejectionReason: "illegal_move",
-				engineEventsCount: 0,
+				engineEvents: [],
 			};
 		}
 	}
@@ -73,13 +73,13 @@ export function applyEngineMoveChecked(opts: {
 			accepted: false,
 			nextState: result.state,
 			rejectionReason: result.reason,
-			engineEventsCount: result.engineEvents.length,
+			engineEvents: result.engineEvents,
 		};
 	}
 	return {
 		accepted: true,
 		nextState: result.state,
-		engineEventsCount: result.engineEvents.length,
+		engineEvents: result.engineEvents,
 	};
 }
 

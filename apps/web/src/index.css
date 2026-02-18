@@ -46,8 +46,8 @@
 	--spectator-glow: rgba(77, 227, 194, 0.3);
 	--mono:
 		"JetBrains Mono", "IBM Plex Mono", "Source Code Pro", ui-monospace,
-		SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-		monospace;
+		"SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono",
+		"Courier New", monospace;
 }
 
 @theme inline {
