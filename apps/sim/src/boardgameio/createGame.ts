@@ -24,7 +24,7 @@ export function createFightclawGame(config: HarnessConfig) {
 		},
 		setup: () => {
 			const { playerMap, reversePlayerMap } = createPlayerMap(config.players);
-			const matchState = config.scenario
+			const initialState = config.scenario
 				? createCombatScenario(
 						config.seed,
 						config.players,
@@ -36,9 +36,12 @@ export function createFightclawGame(config: HarnessConfig) {
 						config.players,
 						config.engineConfig,
 					);
+			const engineConfig = Engine.getEngineConfig(initialState);
+			const matchState = Engine.bindEngineConfig(initialState, engineConfig);
 			assertActivePlayerMapped(matchState, config.players);
 			return {
 				matchState,
+				engineConfig,
 				turnIndex: 1,
 				playerMap,
 				reversePlayerMap,
@@ -71,11 +74,13 @@ export function createFightclawGame(config: HarnessConfig) {
 			},
 			onBegin: ({ G }: { G: BoardgameHarnessState }) => ({
 				...G,
+				matchState: Engine.bindEngineConfig(G.matchState, G.engineConfig),
 				turnIndex: G.turnIndex + 1,
 			}),
 		},
 		endIf: ({ G }: { G: BoardgameHarnessState }) => {
-			const terminal = Engine.isTerminal(G.matchState);
+			const matchState = Engine.bindEngineConfig(G.matchState, G.engineConfig);
+			const terminal = Engine.isTerminal(matchState);
 			if (!terminal.ended) return undefined;
 			return {
 				winner: terminal.winner ?? undefined,
@@ -87,13 +92,20 @@ export function createFightclawGame(config: HarnessConfig) {
 				{ G }: { G: BoardgameHarnessState },
 				payload: MoveApplyPayload,
 			) => {
+				const boundState = Engine.bindEngineConfig(
+					G.matchState,
+					G.engineConfig,
+				);
 				const result = applyEngineMoveChecked({
-					state: G.matchState,
+					state: boundState,
 					move: payload.move,
 					validationMode: config.moveValidationMode,
 				});
 				if (!result.accepted) {
-					return G;
+					return {
+						...G,
+						matchState: boundState,
+					};
 				}
 				return {
 					...G,

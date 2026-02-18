@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyMove,
+	bindEngineConfig,
 	createInitialState,
 	DEFAULT_CONFIG,
 	type EngineEvent,
+	getEngineConfig,
 	type HexId,
 	listLegalMoves,
 	type MatchState,
@@ -15,6 +17,10 @@ import {
 
 const players = ["agent-a", "agent-b"] as const;
 
+function cloneWithConfig(state: MatchState): MatchState {
+	return bindEngineConfig(structuredClone(state), getEngineConfig(state));
+}
+
 function hexIndex(id: HexId): number {
 	const { row, col } = parseHexId(id);
 	return row * 21 + col;
@@ -22,7 +28,7 @@ function hexIndex(id: HexId): number {
 
 /** Remove all units from a state */
 function clearUnits(state: MatchState): MatchState {
-	const s = structuredClone(state);
+	const s = cloneWithConfig(state);
 	s.players.A.units = [];
 	s.players.B.units = [];
 	for (let i = 0; i < s.board.length; i++) {
@@ -41,7 +47,7 @@ function addUnitToState(
 	position: HexId,
 	opts?: Partial<Unit>,
 ): MatchState {
-	const s = structuredClone(state);
+	const s = cloneWithConfig(state);
 	const hp = DEFAULT_CONFIG.unitStats[type].hp;
 	const unit: Unit = {
 		id,
@@ -233,6 +239,50 @@ describe("v2 engine - War of Attrition", () => {
 		const b = run();
 		expect(JSON.stringify(a.state)).toBe(JSON.stringify(b.state));
 		expect(JSON.stringify(a.events)).toBe(JSON.stringify(b.events));
+	});
+
+	test("engine config stays isolated per state across mixed matches", () => {
+		const stateA = createInitialState(
+			11,
+			{ actionsPerTurn: 7, boardColumns: 17 },
+			[...players],
+		);
+		const stateB = createInitialState(
+			22,
+			{ actionsPerTurn: 3, boardColumns: 21 },
+			[...players],
+		);
+
+		const resultA = applyMove(stateA, { action: "end_turn" });
+		expect(resultA.ok).toBe(true);
+		if (!resultA.ok) return;
+
+		const resultB = applyMove(stateB, { action: "end_turn" });
+		expect(resultB.ok).toBe(true);
+		if (!resultB.ok) return;
+
+		expect(resultA.state.actionsRemaining).toBe(7);
+		expect(resultB.state.actionsRemaining).toBe(3);
+		expect(resultA.state.board.length).toBe(9 * 17);
+		expect(resultB.state.board.length).toBe(9 * 21);
+	});
+
+	test("bindEngineConfig preserves replay config after state deserialization", () => {
+		const configured = createInitialState(
+			7,
+			{ actionsPerTurn: 7, boardColumns: 17 },
+			[...players],
+		);
+		const rebound = bindEngineConfig(
+			structuredClone(configured),
+			getEngineConfig(configured),
+		);
+
+		const result = applyMove(rebound, { action: "end_turn" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.state.actionsRemaining).toBe(7);
+		expect(result.state.board.length).toBe(9 * 17);
 	});
 
 	// ---- Move validation ----

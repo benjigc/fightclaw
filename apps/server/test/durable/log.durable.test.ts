@@ -49,6 +49,21 @@ it("exposes match_events log for active featured match with engineEvents payload
 	const moveApplied = logJson.events.find(
 		(event) => event.eventType === "move_applied",
 	);
+	const matchStarted = logJson.events.find(
+		(event) => event.eventType === "match_started",
+	);
+	expect(matchStarted).toBeTruthy();
+	const startedPayload = matchStarted?.payload as
+		| {
+				seed?: unknown;
+				players?: unknown;
+				engineConfig?: { boardColumns?: unknown };
+		  }
+		| undefined;
+	expect(typeof startedPayload?.seed).toBe("number");
+	expect(Array.isArray(startedPayload?.players)).toBe(true);
+	expect(startedPayload?.engineConfig?.boardColumns).toBe(21);
+
 	expect(moveApplied).toBeTruthy();
 	const payload = moveApplied?.payload as
 		| {

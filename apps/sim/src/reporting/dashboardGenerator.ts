@@ -69,6 +69,10 @@ export class DashboardGenerator {
 		fs.writeFileSync(outputPath, html, "utf-8");
 	}
 
+	private formatRate(rate: number): string {
+		return `${(rate * 100).toFixed(1)}%`;
+	}
+
 	private generateHTML(data: DashboardData): string {
 		const serializedData = stringifyForInlineScript(data);
 		return `<!DOCTYPE html>
@@ -516,12 +520,12 @@ export class DashboardGenerator {
 
 		const opening = data.openingChoice[0];
 		const openingText = opening
-			? `${escapeHtml(opening.label)} (${(opening.rate * 100).toFixed(1)}%)`
+			? `${escapeHtml(opening.label)} (${this.formatRate(opening.rate)})`
 			: "n/a";
 		const spikes =
 			data.powerSpikeTurns.length > 0
 				? data.powerSpikeTurns
-						.map((item) => `T${item.turn} (${(item.rate * 100).toFixed(1)}%)`)
+						.map((item) => `T${item.turn} (${this.formatRate(item.rate)})`)
 						.join(", ")
 				: "none observed";
 		const firstCommitmentMean = formatTurnWithPrefix(
@@ -552,19 +556,19 @@ export class DashboardGenerator {
 
 		const top = data.distribution[0];
 		const topText = top
-			? `${escapeHtml(top.archetype)} (${(top.rate * 100).toFixed(1)}%)`
+			? `${escapeHtml(top.archetype)} (${this.formatRate(top.rate)})`
 			: "n/a";
 		const mix = data.distribution
 			.slice(0, 4)
 			.map(
 				(item) =>
-					`${escapeHtml(item.archetype)}: ${(item.rate * 100).toFixed(1)}%`,
+					`${escapeHtml(item.archetype)}: ${this.formatRate(item.rate)}`,
 			)
 			.join(", ");
 
 		return [
 			`<div class="insight-row"><span class="insight-key">Primary profile:</span>${topText}</div>`,
-			`<div class="insight-row"><span class="insight-key">Average confidence:</span>${(data.averageConfidence * 100).toFixed(1)}%</div>`,
+			`<div class="insight-row"><span class="insight-key">Average confidence:</span>${this.formatRate(data.averageConfidence)}</div>`,
 			`<div class="insight-row"><span class="insight-key">Distribution:</span>${mix || "n/a"}</div>`,
 			`<div class="insight-row"><span class="insight-key">Matches analyzed:</span>${data.matchesAnalyzed}</div>`,
 		].join("");

@@ -9,6 +9,7 @@ import {
 import path from "node:path";
 import {
 	createInitialState,
+	type EngineConfigInput,
 	type MatchState,
 	type Move,
 } from "@fightclaw/engine";
@@ -29,6 +30,7 @@ type ReplayMatch = {
 	label: string;
 	scenario: ScenarioName | null;
 	seed: number;
+	engineConfig: EngineConfigInput;
 	participants: [string, string];
 	result: MatchArtifact["result"];
 	initialState: MatchState;
@@ -106,13 +108,19 @@ function findArtifactFiles(runDir: string): string[] {
 	return out.sort((a, b) => a.localeCompare(b));
 }
 
-function createInitialStateForArtifact(artifact: MatchArtifact): MatchState {
+function resolveEngineConfigForArtifact(
+	artifact: MatchArtifact,
+): EngineConfigInput {
 	const boardColumns =
 		artifact.boardColumns ?? artifact.engineConfig?.boardColumns ?? 17;
-	const engineConfig = {
+	return {
 		...(artifact.engineConfig ?? {}),
 		boardColumns,
 	};
+}
+
+function createInitialStateForArtifact(artifact: MatchArtifact): MatchState {
+	const engineConfig = resolveEngineConfigForArtifact(artifact);
 
 	if (artifact.scenario) {
 		return createCombatScenario(
@@ -127,6 +135,7 @@ function createInitialStateForArtifact(artifact: MatchArtifact): MatchState {
 
 function toReplayMatch(file: string): ReplayMatch {
 	const artifact = JSON.parse(readFileSync(file, "utf8")) as MatchArtifact;
+	const engineConfig = resolveEngineConfigForArtifact(artifact);
 	const matchupDir = path.basename(path.dirname(path.dirname(file)));
 	const fileName = path.basename(file, ".json");
 	const id = `${matchupDir}::${fileName}`;
@@ -144,6 +153,7 @@ function toReplayMatch(file: string): ReplayMatch {
 		label,
 		scenario: artifact.scenario ?? null,
 		seed: artifact.seed,
+		engineConfig,
 		participants: artifact.participants,
 		result: artifact.result,
 		initialState: createInitialStateForArtifact(artifact),

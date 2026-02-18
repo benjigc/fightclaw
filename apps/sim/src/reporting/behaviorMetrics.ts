@@ -312,11 +312,271 @@ function resolveArtifactsDir(input: string): string {
 	return direct;
 }
 
+type CommandAttempt = NonNullable<ArtifactTurn["commandAttempts"]>[number];
+type SideTurnEntry = { idx: number; state: ParsedState };
+type SideTurnIndex = Record<"A" | "B", SideTurnEntry[]>;
+type PhaseSpend = Record<"early" | "mid" | "late", number>;
+
+type UpgradeTracking = {
+	hasUpgrade: boolean;
+	firstUpgradeTurn: number | null;
+	upgradesAccepted: number;
+	estimatedGoldSpend: number;
+	estimatedWoodSpend: number;
+};
+
+type AttackSnapshotOutcome = {
+	finisherOpportunities: number;
+	finisherSuccesses: number;
+	favorableTrade: boolean;
+	setback: boolean;
+	attackShare: number;
+};
+
+function listArtifactFiles(artifactsDir: string): string[] {
+	return readdirSync(artifactsDir)
+		.filter((fileName) => fileName.endsWith(".json"))
+		.map((fileName) => path.join(artifactsDir, fileName));
+}
+
+function parseArtifactFile(filePath: string): Artifact | null {
+	try {
+		return JSON.parse(readFileSync(filePath, "utf-8")) as Artifact;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(
+			`Failed to parse artifact JSON (${filePath}): ${message}. Skipping file.`,
+		);
+		return null;
+	}
+}
+
+function getAcceptedAttempts(attempts: CommandAttempt[]): CommandAttempt[] {
+	return attempts.filter((attempt) => attempt.accepted);
+}
+
+function countAttemptsByAction(
+	attempts: CommandAttempt[],
+	action: string,
+): number {
+	return attempts.filter((attempt) => attempt.move.action === action).length;
+}
+
+function hasAnyReasoning(attempts: CommandAttempt[]): boolean {
+	return attempts.some(
+		(attempt) =>
+			typeof attempt.move?.reasoning === "string" &&
+			attempt.move.reasoning.length > 0,
+	);
+}
+
+function addStateResourceAndNodeSamples(
+	state: ParsedState,
+	bankedGoldSamples: number[],
+	bankedWoodSamples: number[],
+	nodeControlShares: number[],
+): void {
+	if (state.gold !== null) bankedGoldSamples.push(state.gold);
+	if (state.wood !== null) bankedWoodSamples.push(state.wood);
+	if (state.ownUnits.length === 0) return;
+	let unitsOnEconomyNodes = 0;
+	for (const unit of state.ownUnits) {
+		const terrain = state.terrainByHex[unit.position];
+		if (terrain && ECON_NODE_TERRAINS.has(terrain)) {
+			unitsOnEconomyNodes++;
+		}
+	}
+	nodeControlShares.push(unitsOnEconomyNodes / state.ownUnits.length);
+}
+
+function addTurnResourceSpend(
+	turn: ArtifactTurn,
+	turnIndex: number,
+	totalTurns: number,
+	resourceSpendByPhase: PhaseSpend,
+): void {
+	const resourceGoldSpend = Math.max(
+		0,
+		-(turn.metricsV2?.resources?.ownGoldDelta ?? 0),
+	);
+	const resourceWoodSpend = Math.max(
+		0,
+		-(turn.metricsV2?.resources?.ownWoodDelta ?? 0),
+	);
+	const resourceSpend = resourceGoldSpend + resourceWoodSpend;
+	if (resourceSpend <= 0) return;
+	const phase = toPhase(turnIndex, totalTurns);
+	resourceSpendByPhase[phase] += resourceSpend;
+}
+
+function accumulateTerrainInitiationMetrics(
+	before: ParsedState,
+	attackAttempts: CommandAttempt[],
+): { fightsWithTerrainData: number; advantagedInitiations: number } {
+	if (attackAttempts.length === 0) {
+		return { fightsWithTerrainData: 0, advantagedInitiations: 0 };
+	}
+	let fightsWithTerrainData = 0;
+	let advantagedInitiations = 0;
+	const ownById = new Map(before.ownUnits.map((unit) => [unit.id, unit]));
+	const enemyByPosition = new Map(
+		before.enemyUnits.map((unit) => [unit.position, unit]),
+	);
+	for (const attack of attackAttempts) {
+		const attacker = attack.move.unitId
+			? ownById.get(attack.move.unitId)
+			: undefined;
+		const targetPosition = attack.move.target;
+		if (!attacker || !targetPosition) continue;
+		const defender = enemyByPosition.get(targetPosition);
+		if (!defender) continue;
+		const attackerTerrain = before.terrainByHex[attacker.position];
+		const defenderTerrain = before.terrainByHex[defender.position];
+		if (!attackerTerrain || !defenderTerrain) continue;
+		fightsWithTerrainData++;
+		if (terrainScore(attackerTerrain) > terrainScore(defenderTerrain)) {
+			advantagedInitiations++;
+		}
+	}
+	return { fightsWithTerrainData, advantagedInitiations };
+}
+
+function analyzeAttackSnapshotOutcome(
+	before: ParsedState,
+	after: ParsedState,
+	attackAttempts: CommandAttempt[],
+	acceptedAttempts: CommandAttempt[],
+): AttackSnapshotOutcome {
+	let finisherOpportunities = 0;
+	let finisherSuccesses = 0;
+	const enemyByPosition = new Map(
+		before.enemyUnits.map((unit) => [unit.position, unit]),
+	);
+	const survivingEnemyIds = new Set(after.enemyUnits.map((unit) => unit.id));
+
+	for (const attack of attackAttempts) {
+		const targetPosition = attack.move.target;
+		if (!targetPosition) continue;
+		const targetUnit = enemyByPosition.get(targetPosition);
+		if (!targetUnit) continue;
+		if (targetUnit.hp <= 1) {
+			finisherOpportunities++;
+			if (!survivingEnemyIds.has(targetUnit.id)) {
+				finisherSuccesses++;
+			}
+		}
+	}
+
+	const beforeEnemyHp = sumHp(before.enemyUnits);
+	const beforeOwnHp = sumHp(before.ownUnits);
+	const afterEnemyHp = sumHp(after.enemyUnits);
+	const afterOwnHp = sumHp(after.ownUnits);
+	const enemyHpLoss = beforeEnemyHp - afterEnemyHp;
+	const ownHpLoss = beforeOwnHp - afterOwnHp;
+	const enemyUnitLoss = before.enemyUnits.length - after.enemyUnits.length;
+	const ownUnitLoss = before.ownUnits.length - after.ownUnits.length;
+
+	return {
+		finisherOpportunities,
+		finisherSuccesses,
+		favorableTrade: enemyHpLoss > ownHpLoss || enemyUnitLoss > ownUnitLoss,
+		setback: ownHpLoss > enemyHpLoss || ownUnitLoss > enemyUnitLoss,
+		attackShare: attackAttempts.length / Math.max(1, acceptedAttempts.length),
+	};
+}
+
+function findNextSideTurnIndex(
+	entries: SideTurnEntry[],
+	currentIndex: number,
+): number | undefined {
+	return entries.find((entry) => entry.idx > currentIndex)?.idx;
+}
+
+function isAdaptedFollowup(
+	nextAcceptedAttempts: CommandAttempt[],
+	currentAttackShare: number,
+): boolean {
+	const nextAttackShare =
+		countAttemptsByAction(nextAcceptedAttempts, "attack") /
+		Math.max(1, nextAcceptedAttempts.length);
+	const usedRecoveryAction = nextAcceptedAttempts.some(
+		(attempt) =>
+			attempt.move.action === "recruit" || attempt.move.action === "fortify",
+	);
+	return usedRecoveryAction || nextAttackShare <= currentAttackShare - 0.25;
+}
+
+function maybeRecordUpgradeTurn(
+	turn: ArtifactTurn,
+	acceptedAttempts: CommandAttempt[],
+	turnNumber: number,
+	tracking: UpgradeTracking,
+): void {
+	const upgradeMetrics = turn.metricsV2?.upgrade;
+	const upgradesAcceptedFromMetrics = upgradeMetrics?.upgradesAccepted ?? 0;
+	if (upgradesAcceptedFromMetrics > 0) {
+		tracking.hasUpgrade = true;
+		tracking.upgradesAccepted += upgradesAcceptedFromMetrics;
+		tracking.estimatedGoldSpend += upgradeMetrics?.estimatedGoldSpend ?? 0;
+		tracking.estimatedWoodSpend += upgradeMetrics?.estimatedWoodSpend ?? 0;
+		if (tracking.firstUpgradeTurn === null) {
+			tracking.firstUpgradeTurn = turnNumber;
+		}
+		return;
+	}
+
+	const upgradesAcceptedFromAttempts = countAttemptsByAction(
+		acceptedAttempts,
+		"upgrade",
+	);
+	if (upgradesAcceptedFromAttempts <= 0) return;
+	tracking.hasUpgrade = true;
+	tracking.upgradesAccepted += upgradesAcceptedFromAttempts;
+	if (tracking.firstUpgradeTurn === null) {
+		tracking.firstUpgradeTurn = turnNumber;
+	}
+}
+
+function collectPositionalProgressionDeltas(sideTurnIndex: SideTurnIndex): {
+	A: number | null;
+	B: number | null;
+} {
+	const computeDelta = (side: "A" | "B"): number | null => {
+		const targetCol = side === "A" ? 20 : 2;
+		const series = sideTurnIndex[side]
+			.sort((left, right) => left.idx - right.idx)
+			.map((entry) => {
+				const distances = entry.state.ownUnits
+					.map((unit) => parseCol(unit.position))
+					.filter((value): value is number => value !== null)
+					.map((col) => Math.abs(col - targetCol));
+				return distances.length > 0 ? mean(distances) : null;
+			})
+			.filter((value): value is number => value !== null);
+		if (series.length < 2) return null;
+		const first = series[0];
+		const last = series[series.length - 1];
+		if (first === undefined || last === undefined) return null;
+		return last - first;
+	};
+
+	return {
+		A: computeDelta("A"),
+		B: computeDelta("B"),
+	};
+}
+
+function sortedActionEntries(
+	acceptedActionCounts: Map<string, number>,
+): Array<[string, number]> {
+	return Array.from(acceptedActionCounts.entries()).sort((a, b) =>
+		a[0].localeCompare(b[0]),
+	);
+}
+
 export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 	const artifactsDir = resolveArtifactsDir(input);
-	const files = readdirSync(artifactsDir)
-		.filter((f) => f.endsWith(".json"))
-		.map((f) => path.join(artifactsDir, f));
+	const files = listArtifactFiles(artifactsDir);
 
 	let illegalMoves = 0;
 	let attacks = 0;
@@ -360,17 +620,10 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 	let parsedGames = 0;
 
 	for (const file of files) {
-		let artifact: Artifact;
-		try {
-			artifact = JSON.parse(readFileSync(file, "utf-8")) as Artifact;
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			console.error(
-				`Failed to parse artifact JSON (${file}): ${message}. Skipping file.`,
-			);
-			continue;
-		}
+		const artifact = parseArtifactFile(file);
+		if (!artifact) continue;
 		parsedGames++;
+
 		const parsedIllegalMoves = artifact.result?.illegalMoves;
 		if (
 			typeof parsedIllegalMoves === "number" &&
@@ -378,87 +631,69 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 		) {
 			illegalMoves += parsedIllegalMoves;
 		}
-		let gameHasUpgrade = false;
-		let gameFirstUpgradeTurn: number | null = null;
-		let gameUpgradeCount = 0;
-		let gameUpgradeGoldSpend = 0;
-		let gameUpgradeWoodSpend = 0;
+		const upgradeTracking: UpgradeTracking = {
+			hasUpgrade: false,
+			firstUpgradeTurn: null,
+			upgradesAccepted: 0,
+			estimatedGoldSpend: 0,
+			estimatedWoodSpend: 0,
+		};
 		let gameFirstRecruitTurn: number | null = null;
 		const lastTurnUsedFortifyBySide: Partial<Record<"A" | "B", boolean>> = {};
 
-		const actionCounts = new Map<string, number>();
-		for (const mv of artifact.acceptedMoves ?? []) {
-			const action = mv.engineMove?.action ?? "unknown";
-			actionCounts.set(action, (actionCounts.get(action) ?? 0) + 1);
+		const gameActionCounts = new Map<string, number>();
+		for (const acceptedMove of artifact.acceptedMoves ?? []) {
+			const action = acceptedMove.engineMove?.action ?? "unknown";
+			gameActionCounts.set(action, (gameActionCounts.get(action) ?? 0) + 1);
 			acceptedActionCounts.set(
 				action,
 				(acceptedActionCounts.get(action) ?? 0) + 1,
 			);
 		}
-		if (actionCounts.size > 0) {
+		if (gameActionCounts.size > 0) {
 			gamesWithAcceptedMoves++;
-			uniqueActionCounts.push(actionCounts.size);
-			entropies.push(shannonEntropy(actionCounts));
+			uniqueActionCounts.push(gameActionCounts.size);
+			entropies.push(shannonEntropy(gameActionCounts));
 		}
 
-		const sideTurns: Record<
-			"A" | "B",
-			Array<{ idx: number; state: ParsedState }>
-		> = {
+		const sideTurns: SideTurnIndex = {
 			A: [],
 			B: [],
 		};
-		const parsedStates: Array<ParsedState | null> = artifact.turns.map((t) =>
-			parseStateFromPrompt(t.prompt),
+		const parsedStates: Array<ParsedState | null> = artifact.turns.map((turn) =>
+			parseStateFromPrompt(turn.prompt),
 		);
-		for (let i = 0; i < parsedStates.length; i++) {
-			const ps = parsedStates[i];
-			if (!ps) continue;
-			sideTurns[ps.side].push({ idx: i, state: ps });
+		for (let stateIndex = 0; stateIndex < parsedStates.length; stateIndex++) {
+			const state = parsedStates[stateIndex];
+			if (!state) continue;
+			sideTurns[state.side].push({ idx: stateIndex, state });
 		}
 
-		for (let i = 0; i < artifact.turns.length; i++) {
-			const turn = artifact.turns[i];
+		for (let turnIndex = 0; turnIndex < artifact.turns.length; turnIndex++) {
+			const turn = artifact.turns[turnIndex];
 			if (!turn) continue;
 			const attempts = turn.commandAttempts ?? [];
+			const acceptedAttempts = getAcceptedAttempts(attempts);
+
 			turns++;
 			if (turn.prompt) turnsWithPrompt++;
 			if (turn.rawOutput?.trim()) turnsWithRawOutput++;
-			if (
-				attempts.some(
-					(attempt) =>
-						typeof attempt.move?.reasoning === "string" &&
-						attempt.move.reasoning.length > 0,
-				)
-			) {
+			if (hasAnyReasoning(attempts)) {
 				turnsWithReasoningField++;
 			}
 
-			const metricsUpgrade = turn.metricsV2?.upgrade;
-			const upgradesAcceptedFromMetrics = metricsUpgrade?.upgradesAccepted ?? 0;
-			if (upgradesAcceptedFromMetrics > 0) {
-				gameHasUpgrade = true;
-				gameUpgradeCount += upgradesAcceptedFromMetrics;
-				gameUpgradeGoldSpend += metricsUpgrade?.estimatedGoldSpend ?? 0;
-				gameUpgradeWoodSpend += metricsUpgrade?.estimatedWoodSpend ?? 0;
-				if (gameFirstUpgradeTurn === null) {
-					gameFirstUpgradeTurn = i + 1;
-				}
-			} else {
-				const upgradesAcceptedFromAttempts = attempts.filter(
-					(a) => a.accepted && a.move.action === "upgrade",
-				).length;
-				if (upgradesAcceptedFromAttempts > 0) {
-					gameHasUpgrade = true;
-					gameUpgradeCount += upgradesAcceptedFromAttempts;
-					if (gameFirstUpgradeTurn === null) {
-						gameFirstUpgradeTurn = i + 1;
-					}
-				}
-			}
+			maybeRecordUpgradeTurn(
+				turn,
+				acceptedAttempts,
+				turnIndex + 1,
+				upgradeTracking,
+			);
 
-			const before = parsedStates[i];
-			const after = i + 1 < parsedStates.length ? parsedStates[i + 1] : null;
+			const before = parsedStates[turnIndex];
+			const after =
+				turnIndex + 1 < parsedStates.length
+					? parsedStates[turnIndex + 1]
+					: null;
 			const sideKey = before?.side ?? turn.metricsV2?.side;
 			const ownHpLoss =
 				typeof turn.metricsV2?.combat?.ownHpDelta === "number"
@@ -466,125 +701,78 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 					: null;
 
 			if (before) {
-				if (before.gold !== null) bankedGoldSamples.push(before.gold);
-				if (before.wood !== null) bankedWoodSamples.push(before.wood);
-				if (before.ownUnits.length > 0) {
-					let onNode = 0;
-					for (const unit of before.ownUnits) {
-						const terrain = before.terrainByHex[unit.position];
-						if (terrain && ECON_NODE_TERRAINS.has(terrain)) onNode++;
-					}
-					nodeControlShares.push(onNode / before.ownUnits.length);
-				}
+				addStateResourceAndNodeSamples(
+					before,
+					bankedGoldSamples,
+					bankedWoodSamples,
+					nodeControlShares,
+				);
 			}
 
-			const accepted = attempts.filter((a) => a.accepted);
-			const acceptedFortifies = accepted.filter(
-				(a) => a.move.action === "fortify",
+			const acceptedFortifyCount = countAttemptsByAction(
+				acceptedAttempts,
+				"fortify",
 			);
-			fortifyActionsAccepted += acceptedFortifies.length;
+			fortifyActionsAccepted += acceptedFortifyCount;
 			if (gameFirstRecruitTurn === null) {
-				const hasRecruit = accepted.some((a) => a.move.action === "recruit");
-				if (hasRecruit) gameFirstRecruitTurn = i + 1;
+				const hasRecruit = acceptedAttempts.some(
+					(attempt) => attempt.move.action === "recruit",
+				);
+				if (hasRecruit) gameFirstRecruitTurn = turnIndex + 1;
 			}
-			const resourceGoldSpend = Math.max(
-				0,
-				-(turn.metricsV2?.resources?.ownGoldDelta ?? 0),
+
+			addTurnResourceSpend(
+				turn,
+				turnIndex,
+				artifact.turns.length,
+				resourceSpendByPhase,
 			);
-			const resourceWoodSpend = Math.max(
-				0,
-				-(turn.metricsV2?.resources?.ownWoodDelta ?? 0),
-			);
-			const resourceSpend = resourceGoldSpend + resourceWoodSpend;
-			if (resourceSpend > 0) {
-				const phase = toPhase(i, artifact.turns.length);
-				resourceSpendByPhase[phase] += resourceSpend;
-			}
-			const turnAttackAttempts = accepted.filter(
-				(a) => a.move.action === "attack",
+
+			const turnAttackAttempts = acceptedAttempts.filter(
+				(attempt) => attempt.move.action === "attack",
 			);
 			attacks += turnAttackAttempts.length;
 			terrainFightsInitiated += turnAttackAttempts.length;
 
 			if (before && turnAttackAttempts.length > 0) {
-				const ownById = new Map(before.ownUnits.map((u) => [u.id, u]));
-				const enemyByPos = new Map(
-					before.enemyUnits.map((u) => [u.position, u]),
+				const terrainMetrics = accumulateTerrainInitiationMetrics(
+					before,
+					turnAttackAttempts,
 				);
-				for (const attack of turnAttackAttempts) {
-					const attacker = attack.move.unitId
-						? ownById.get(attack.move.unitId)
-						: undefined;
-					const targetPos = attack.move.target;
-					if (!attacker || !targetPos) continue;
-					const defender = enemyByPos.get(targetPos);
-					if (!defender) continue;
-					const attackerTerrain = before.terrainByHex[attacker.position];
-					const defenderTerrain = before.terrainByHex[defender.position];
-					if (!attackerTerrain || !defenderTerrain) continue;
-					terrainFightsWithData++;
-					if (terrainScore(attackerTerrain) > terrainScore(defenderTerrain)) {
-						terrainAdvantagedInitiations++;
-					}
-				}
+				terrainFightsWithData += terrainMetrics.fightsWithTerrainData;
+				terrainAdvantagedInitiations += terrainMetrics.advantagedInitiations;
 			}
 
 			if (before && after && turnAttackAttempts.length > 0) {
 				attackTurnsWithSnapshot++;
-				const enemyByPos = new Map(
-					before.enemyUnits.map((u) => [u.position, u]),
+				const snapshotOutcome = analyzeAttackSnapshotOutcome(
+					before,
+					after,
+					turnAttackAttempts,
+					acceptedAttempts,
 				);
-				const afterEnemyIds = new Set(after.enemyUnits.map((u) => u.id));
+				finisherOpportunities += snapshotOutcome.finisherOpportunities;
+				finisherSuccesses += snapshotOutcome.finisherSuccesses;
+				if (snapshotOutcome.favorableTrade) favorableTradeTurns++;
 
-				for (const a of turnAttackAttempts) {
-					const targetPos = a.move.target;
-					if (!targetPos) continue;
-					const targetUnit = enemyByPos.get(targetPos);
-					if (!targetUnit) continue;
-					if (targetUnit.hp <= 1) {
-						finisherOpportunities++;
-						if (!afterEnemyIds.has(targetUnit.id)) {
-							finisherSuccesses++;
-						}
-					}
-				}
-
-				const beforeEnemyHp = sumHp(before.enemyUnits);
-				const beforeOwnHp = sumHp(before.ownUnits);
-				const afterEnemyHp = sumHp(after.enemyUnits);
-				const afterOwnHp = sumHp(after.ownUnits);
-				const enemyHpLoss = beforeEnemyHp - afterEnemyHp;
-				const turnOwnHpLoss = beforeOwnHp - afterOwnHp;
-				const enemyUnitLoss =
-					before.enemyUnits.length - after.enemyUnits.length;
-				const ownUnitLoss = before.ownUnits.length - after.ownUnits.length;
-				const favorable =
-					enemyHpLoss > turnOwnHpLoss || enemyUnitLoss > ownUnitLoss;
-				if (favorable) favorableTradeTurns++;
-
-				const setback =
-					turnOwnHpLoss > enemyHpLoss || ownUnitLoss > enemyUnitLoss;
-				if (setback) {
+				if (snapshotOutcome.setback) {
 					setbackTurns++;
-					const side = before.side;
-					const nextSameSideIdx = sideTurns[side].find((t) => t.idx > i)?.idx;
+					const nextSameSideIdx = findNextSideTurnIndex(
+						sideTurns[before.side],
+						turnIndex,
+					);
 					if (nextSameSideIdx !== undefined) {
 						followupTurns++;
-						const thisAttackShare =
-							turnAttackAttempts.length / Math.max(1, accepted.length);
 						const nextTurn = artifact.turns[nextSameSideIdx];
 						if (!nextTurn) continue;
-						const nextAttempts = nextTurn.commandAttempts ?? [];
-						const nextAccepted = nextAttempts.filter((a) => a.accepted);
-						const nextAttackShare =
-							nextAccepted.filter((a) => a.move.action === "attack").length /
-							Math.max(1, nextAccepted.length);
-						const usedRecoveryAction = nextAccepted.some(
-							(a) => a.move.action === "recruit" || a.move.action === "fortify",
+						const nextAcceptedAttempts = getAcceptedAttempts(
+							nextTurn.commandAttempts ?? [],
 						);
 						if (
-							usedRecoveryAction ||
-							nextAttackShare <= thisAttackShare - 0.25
+							isAdaptedFollowup(
+								nextAcceptedAttempts,
+								snapshotOutcome.attackShare,
+							)
 						) {
 							adaptedFollowups++;
 						}
@@ -598,62 +786,39 @@ export function analyzeBehaviorFromArtifacts(input: string): BehaviorSummary {
 				} else {
 					ownHpLossWithoutFortify.push(ownHpLoss);
 				}
-				lastTurnUsedFortifyBySide[sideKey] = acceptedFortifies.length > 0;
+				lastTurnUsedFortifyBySide[sideKey] = acceptedFortifyCount > 0;
 			}
 		}
 
-		if (gameHasUpgrade) {
+		if (upgradeTracking.hasUpgrade) {
 			gamesWithUpgrade++;
-			totalUpgradesAccepted += gameUpgradeCount;
-			totalEstimatedUpgradeGoldSpend += gameUpgradeGoldSpend;
-			totalEstimatedUpgradeWoodSpend += gameUpgradeWoodSpend;
-			if (gameFirstUpgradeTurn !== null) {
-				firstUpgradeTurns.push(gameFirstUpgradeTurn);
+			totalUpgradesAccepted += upgradeTracking.upgradesAccepted;
+			totalEstimatedUpgradeGoldSpend += upgradeTracking.estimatedGoldSpend;
+			totalEstimatedUpgradeWoodSpend += upgradeTracking.estimatedWoodSpend;
+			if (upgradeTracking.firstUpgradeTurn !== null) {
+				firstUpgradeTurns.push(upgradeTracking.firstUpgradeTurn);
 			}
 		}
 		if (gameFirstRecruitTurn !== null) {
 			firstRecruitTurns.push(gameFirstRecruitTurn);
 		}
 
-		for (const side of ["A", "B"] as const) {
-			const series = sideTurns[side]
-				.sort((a, b) => a.idx - b.idx)
-				.map((x) => {
-					const targetCol = side === "A" ? 20 : 2;
-					const dists = x.state.ownUnits
-						.map((u) => parseCol(u.position))
-						.filter((v): v is number => v !== null)
-						.map((col) => Math.abs(col - targetCol));
-					return dists.length > 0 ? mean(dists) : null;
-				})
-				.filter((v): v is number => v !== null);
-			if (series.length >= 2) {
-				const first = series[0];
-				const last = series[series.length - 1];
-				if (first === undefined || last === undefined) continue;
-				const delta = last - first;
-				if (side === "A") progressionA.push(delta);
-				else progressionB.push(delta);
-			}
-		}
+		const progressionDelta = collectPositionalProgressionDeltas(sideTurns);
+		if (progressionDelta.A !== null) progressionA.push(progressionDelta.A);
+		if (progressionDelta.B !== null) progressionB.push(progressionDelta.B);
 	}
 
 	const acceptedActionTotal = Array.from(acceptedActionCounts.values()).reduce(
 		(sum, value) => sum + value,
 		0,
 	);
-	const acceptedActionCountsObj = Object.fromEntries(
-		Array.from(acceptedActionCounts.entries()).sort((a, b) =>
-			a[0].localeCompare(b[0]),
-		),
-	);
+	const sortedActionCounts = sortedActionEntries(acceptedActionCounts);
+	const acceptedActionCountsObj = Object.fromEntries(sortedActionCounts);
 	const normalizedAcceptedActions = Object.fromEntries(
-		Array.from(acceptedActionCounts.entries())
-			.sort((a, b) => a[0].localeCompare(b[0]))
-			.map(([action, count]) => [
-				action,
-				acceptedActionTotal > 0 ? count / acceptedActionTotal : 0,
-			]),
+		sortedActionCounts.map(([action, count]) => [
+			action,
+			acceptedActionTotal > 0 ? count / acceptedActionTotal : 0,
+		]),
 	);
 	const totalResourceSpend =
 		resourceSpendByPhase.early +

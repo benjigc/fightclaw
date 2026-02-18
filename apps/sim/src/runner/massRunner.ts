@@ -36,6 +36,32 @@ interface WorkerBatchResponse {
 	error?: string;
 }
 
+function getCheckpointPath(outputDir: string): string {
+	return path.join(outputDir, "checkpoint.json");
+}
+
+function maybeLogProgress(
+	completedCount: number,
+	totalGames: number,
+	lastReportedPercent: number,
+): number {
+	const currentPercent = Math.floor((completedCount / totalGames) * 100);
+	const lastReportedCount = Math.floor(
+		(lastReportedPercent / 100) * totalGames,
+	);
+	const crossedPercentThreshold = currentPercent >= lastReportedPercent + 5;
+	const crossedCountThreshold = completedCount - lastReportedCount >= 1000;
+
+	if (crossedPercentThreshold || crossedCountThreshold) {
+		console.log(
+			`Progress: ${completedCount}/${totalGames} matches (${currentPercent}%)`,
+		);
+		return currentPercent;
+	}
+
+	return lastReportedPercent;
+}
+
 function createEmptyStats(): SimulationStats {
 	return {
 		totalGames: 0,
@@ -163,7 +189,7 @@ function aggregateResults(
 }
 
 function loadCheckpoint(outputDir: string): Checkpoint | null {
-	const checkpointPath = path.join(outputDir, "checkpoint.json");
+	const checkpointPath = getCheckpointPath(outputDir);
 	if (fs.existsSync(checkpointPath)) {
 		try {
 			const data = fs.readFileSync(checkpointPath, "utf-8");
@@ -187,7 +213,7 @@ function saveCheckpoint(
 		timestamp: Date.now(),
 	};
 	fs.writeFileSync(
-		path.join(outputDir, "checkpoint.json"),
+		getCheckpointPath(outputDir),
 		JSON.stringify(checkpoint, null, 2),
 	);
 }
@@ -208,7 +234,7 @@ function writeSummary(outputDir: string, stats: SimulationStats): void {
 }
 
 function cleanupCheckpoint(outputDir: string): void {
-	const checkpointPath = path.join(outputDir, "checkpoint.json");
+	const checkpointPath = getCheckpointPath(outputDir);
 	if (fs.existsSync(checkpointPath)) {
 		fs.unlinkSync(checkpointPath);
 	}
@@ -361,6 +387,23 @@ export async function runMassSimulation(
 		// Sequential mode — run in-process
 		const { playMatch } = await import("../match");
 		const batchSize = 100;
+		const createMatchOptions = (seed: number) => ({
+			seed,
+			players,
+			maxTurns: options.maxTurns,
+			verbose: false,
+			record: false,
+			autofixIllegal: true,
+			engineConfig,
+			scenario: harnessOptions?.scenario,
+			harness: harnessOptions?.harness,
+			invalidPolicy: harnessOptions?.invalidPolicy,
+			moveValidationMode: harnessOptions?.moveValidationMode,
+			strict: harnessOptions?.strict,
+			artifactDir: harnessOptions?.artifactDir,
+			storeFullPrompt: harnessOptions?.storeFullPrompt,
+			storeFullOutput: harnessOptions?.storeFullOutput,
+		});
 
 		for (let i = 0; i < allSeeds.length; i += batchSize) {
 			if (shutdownRequested) break;
@@ -369,45 +412,18 @@ export async function runMassSimulation(
 			const batchResults: MatchResult[] = [];
 
 			for (const seed of batch) {
-				const result = await playMatch({
-					seed,
-					players,
-					maxTurns: options.maxTurns,
-					verbose: false,
-					record: false,
-					autofixIllegal: true,
-					engineConfig,
-					scenario: harnessOptions?.scenario,
-					harness: harnessOptions?.harness,
-					invalidPolicy: harnessOptions?.invalidPolicy,
-					moveValidationMode: harnessOptions?.moveValidationMode,
-					strict: harnessOptions?.strict,
-					artifactDir: harnessOptions?.artifactDir,
-					storeFullPrompt: harnessOptions?.storeFullPrompt,
-					storeFullOutput: harnessOptions?.storeFullOutput,
-				});
+				const result = await playMatch(createMatchOptions(seed));
 				batchResults.push(result);
 				completedSeedSet.add(seed);
 			}
 
 			allResults.push(...batchResults);
 			appendResultsToJsonl(options.outputDir, batchResults);
-
-			const currentPercent = Math.floor(
-				(completedSeedSet.size / totalGames) * 100,
+			lastReportedPercent = maybeLogProgress(
+				completedSeedSet.size,
+				totalGames,
+				lastReportedPercent,
 			);
-
-			if (
-				currentPercent >= lastReportedPercent + 5 ||
-				completedSeedSet.size -
-					Math.floor((lastReportedPercent / 100) * totalGames) >=
-					1000
-			) {
-				console.log(
-					`Progress: ${completedSeedSet.size}/${totalGames} matches (${currentPercent}%)`,
-				);
-				lastReportedPercent = currentPercent;
-			}
 		}
 	} else {
 		// Parallel mode with child_process.fork()
@@ -457,21 +473,11 @@ export async function runMassSimulation(
 							}
 							allResults.push(...results);
 							appendResultsToJsonl(options.outputDir, results);
-
-							const currentPercent = Math.floor(
-								(completedSeedSet.size / totalGames) * 100,
+							lastReportedPercent = maybeLogProgress(
+								completedSeedSet.size,
+								totalGames,
+								lastReportedPercent,
 							);
-							if (
-								currentPercent >= lastReportedPercent + 5 ||
-								completedSeedSet.size -
-									Math.floor((lastReportedPercent / 100) * totalGames) >=
-									1000
-							) {
-								console.log(
-									`Progress: ${completedSeedSet.size}/${totalGames} matches (${currentPercent}%)`,
-								);
-								lastReportedPercent = currentPercent;
-							}
 						} catch (error) {
 							console.error(`Worker ${w} failed on chunk:`, error);
 							// Try to continue with remaining chunks

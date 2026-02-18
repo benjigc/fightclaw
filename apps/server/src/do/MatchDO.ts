@@ -3,6 +3,7 @@ import {
 	applyMove,
 	type EngineEvent,
 	type GameState,
+	getEngineConfig,
 	initialState,
 	isTerminal,
 	listLegalMoves,
@@ -407,6 +408,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 			await this.recordEvent(nextState, "match_started", {
 				players: nextState.players,
 				seed,
+				engineConfig: getEngineConfig(nextState.game),
 			});
 
 			// Emit match_started metric
