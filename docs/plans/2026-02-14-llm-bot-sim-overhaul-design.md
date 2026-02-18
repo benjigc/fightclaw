@@ -41,7 +41,7 @@ Replace the verbose ASCII board + JSON move dump with structured, compact notati
 
 ### Board state encoding
 
-```text
+```
 STATE turn=12 player=A actions=7 gold=19 wood=3 vp=3
 ENEMY gold=15 wood=1 vp=1
 
@@ -70,7 +70,7 @@ LAST_ENEMY_TURN:
 
 Categorized by action type, compact format:
 
-```text
+```
 LEGAL_MOVES:
 ATTACKS:
   attack A-1 F11 (target: B-1 inf hp=2/3)
@@ -95,7 +95,7 @@ Instead of 5-7 API calls per turn (one per action), the LLM gets one call and re
 
 ### Command format
 
-```text
+```
 move A-4 E10
 attack A-1 F11
 attack A-6 F11
@@ -130,7 +130,7 @@ Subsequent calls include only:
 
 The LLM responds with commands followed by optional reasoning:
 
-```text
+```
 move A-4 E10
 attack A-1 F11
 recruit infantry B2

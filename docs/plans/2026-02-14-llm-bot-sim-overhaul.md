@@ -10,7 +10,7 @@
 
 ---
 
-## Task 1: Engine Config Passthrough in Adapter
+### Task 1: Engine Config Passthrough in Adapter
 
 **Files:**
 - Modify: `apps/sim/src/engineAdapter.ts`
@@ -102,7 +102,7 @@ git commit -m "feat(sim): pass engine config overrides through adapter"
 
 ---
 
-## Task 2: Wire Config Through Match Runner and CLI
+### Task 2: Wire Config Through Match Runner and CLI
 
 **Files:**
 - Modify: `apps/sim/src/match.ts`
@@ -189,7 +189,7 @@ git commit -m "feat(sim): wire turnLimit and actionsPerTurn CLI flags"
 
 ---
 
-## Task 3: Wire Combat Scenarios into CLI
+### Task 3: Wire Combat Scenarios into CLI
 
 **Files:**
 - Modify: `apps/sim/src/scenarios/combatScenarios.ts`
@@ -336,7 +336,7 @@ git commit -m "feat(sim): wire combat scenarios into CLI with midfield scenario"
 
 ---
 
-## Task 4: Batch Turn Bot Interface
+### Task 4: Batch Turn Bot Interface
 
 **Files:**
 - Modify: `apps/sim/src/types.ts`
@@ -509,7 +509,7 @@ git commit -m "feat(sim): add chooseTurn batch interface to Bot type and match r
 
 ---
 
-## Task 5: Compact State Encoder
+### Task 5: Compact State Encoder
 
 **Files:**
 - Create: `apps/sim/src/bots/stateEncoder.ts`
@@ -775,7 +775,7 @@ git commit -m "feat(sim): add compact state encoder for LLM context"
 
 ---
 
-## Task 6: Command Parser
+### Task 6: Command Parser
 
 **Files:**
 - Create: `apps/sim/src/bots/commandParser.ts`
@@ -1019,7 +1019,7 @@ git commit -m "feat(sim): add CLI command parser for LLM bot output"
 
 ---
 
-## Task 7: Rewrite LLM Bot with Batch Turn and Compact Prompts
+### Task 7: Rewrite LLM Bot with Batch Turn and Compact Prompts
 
 **Files:**
 - Modify: `apps/sim/src/bots/llmBot.ts`
@@ -1080,7 +1080,7 @@ Full rewrite of `apps/sim/src/bots/llmBot.ts`. Key changes:
 
 The system prompt on the first call:
 
-```text
+```
 You are Player {side} in Fightclaw, a hex strategy game.
 
 COMMAND FORMAT (one per line):
@@ -1109,7 +1109,7 @@ The `chooseTurn` method:
 4. Matches each command against legal moves
 5. Returns the matched `Move[]` array
 
-Export `parseLlmResponse` for testing (wraps `parseCommandsWithReasoning` with Markdown code block stripping).
+Export `parseLlmResponse` for testing (wraps `parseCommandsWithReasoning` with markdown code block stripping).
 
 **Step 4: Run test to verify it passes**
 
@@ -1130,7 +1130,7 @@ git commit -m "feat(sim): rewrite LLM bot with batch turn and CLI commands"
 
 ---
 
-## Task 8: Update Diagnostics for Batch Model
+### Task 8: Update Diagnostics for Batch Model
 
 **Files:**
 - Modify: `apps/sim/src/diagnostics/collector.ts`
@@ -1174,7 +1174,7 @@ git commit -m "feat(sim): update diagnostics for batch turn model"
 
 ---
 
-## Task 9: Integration Test — Full Game with Mock Batch Bot
+### Task 9: Integration Test — Full Game with Mock Batch Bot
 
 **Files:**
 - Test: `apps/sim/test/integration.test.ts`
@@ -1240,7 +1240,7 @@ git commit -m "test(sim): add integration tests for config overrides and scenari
 
 ---
 
-## Task 10: Manual Smoke Test and Cleanup
+### Task 10: Manual Smoke Test and Cleanup
 
 **Step 1: Run greedy vs aggressive on the full board with new config**
 

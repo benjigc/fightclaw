@@ -10,7 +10,7 @@
 
 ---
 
-## Task 1: Shared Nav Bar in `__root.tsx`
+### Task 1: Shared Nav Bar in `__root.tsx`
 
 **Files:**
 - Modify: `apps/web/src/routes/__root.tsx`
@@ -142,10 +142,10 @@ function RootComponent() {
 In `apps/web/src/routes/index.tsx`:
 
 1. Remove the `NAV_LINKS` constant at module level.
-2. Then delete the `<nav className="flex gap-4">` block from inside `.spectator-top-bar`.
-3. Also drop the `Link` import from `@tanstack/react-router` (keep `createFileRoute`).
+2. Remove the `<nav className="flex gap-4">` block from inside `.spectator-top-bar`.
+3. Remove the `Link` import from `@tanstack/react-router` (keep `createFileRoute`).
 
-The spectator top bar should now only show the status badge and centered game info. No nav links.
+The spectator top bar should now only show: status badge, center game info. No nav links.
 
 **Step 4: Update spectator-landing height to account for root nav**
 
@@ -173,9 +173,9 @@ And update `.spectator-main` height:
 
 Run: `pnpm run dev:web`
 
-- Open `localhost:3001` — should see "FIGHTCLAW" nav bar at top, "Spectate" link active, game info bar below, board + thought panels filling the rest.
-- Check `/leaderboard` — should show the same nav bar with "Leaderboard" active.
-- Confirm `/dev` — should show the same nav bar with "Dev" active (dev mode only).
+- Navigate to `localhost:3001` — should see "FIGHTCLAW" nav bar at top, "Spectate" link active, game info bar below, board + thought panels filling the rest.
+- Navigate to `/leaderboard` — should see same nav bar, "Leaderboard" active.
+- Navigate to `/dev` — should see same nav bar, "Dev" active (dev mode only).
 - No vertical scrolling on any page.
 
 **Step 6: Commit**
@@ -187,7 +187,7 @@ git commit -m "feat(web): add shared terminal nav bar to all routes"
 
 ---
 
-## Task 2: Leaderboard Terminal Restyle
+### Task 2: Leaderboard Terminal Restyle
 
 **Files:**
 - Modify: `apps/web/src/routes/leaderboard.tsx`
@@ -400,7 +400,7 @@ git commit -m "feat(web): restyle leaderboard with terminal aesthetic"
 
 ---
 
-## Task 3: Dev Page — Spectator Layout with Dev Controls Panel
+### Task 3: Dev Page — Spectator Layout with Dev Controls Panel
 
 **Files:**
 - Modify: `apps/web/src/routes/dev.tsx`
