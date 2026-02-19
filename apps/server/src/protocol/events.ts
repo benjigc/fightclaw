@@ -1,19 +1,26 @@
-import type { SpectatorEvent } from "@fightclaw/engine";
+import type {
+	AgentThoughtEvent,
+	EngineEventsEvent,
+	GameEndedEvent,
+	MatchEndedEvent,
+	MatchFoundEvent,
+	NoEventsEvent,
+	StateEvent,
+	YourTurnEvent,
+} from "@fightclaw/protocol";
+import { EVENT_VERSION } from "@fightclaw/protocol";
 
-export const EVENT_VERSION = 1 as const;
-
-type EventOf<E extends SpectatorEvent["event"]> = Extract<
-	SpectatorEvent,
-	{ event: E }
->;
-
-export type MatchFoundEvent = EventOf<"match_found">;
-export type YourTurnEvent = EventOf<"your_turn">;
-export type StateEvent = EventOf<"state">;
-export type EngineEventsEvent = EventOf<"engine_events">;
-export type MatchEndedEvent = EventOf<"match_ended">;
-export type GameEndedEvent = EventOf<"game_ended">;
-export type NoEventsEvent = EventOf<"no_events">;
+export { EVENT_VERSION };
+export type {
+	AgentThoughtEvent,
+	EngineEventsEvent,
+	GameEndedEvent,
+	MatchEndedEvent,
+	MatchFoundEvent,
+	NoEventsEvent,
+	StateEvent,
+	YourTurnEvent,
+};
 
 export const buildMatchFoundEvent = (
 	matchId: string,
@@ -37,7 +44,7 @@ export const buildYourTurnEvent = (
 
 export const buildStateEvent = (
 	matchId: string,
-	state: StateEvent["state"],
+	state: unknown,
 ): StateEvent => ({
 	eventVersion: EVENT_VERSION,
 	event: "state",
@@ -51,6 +58,16 @@ export const buildEngineEventsEvent = (
 ): EngineEventsEvent => ({
 	eventVersion: EVENT_VERSION,
 	event: "engine_events",
+	matchId,
+	...payload,
+});
+
+export const buildAgentThoughtEvent = (
+	matchId: string,
+	payload: Omit<AgentThoughtEvent, "eventVersion" | "event" | "matchId">,
+): AgentThoughtEvent => ({
+	eventVersion: EVENT_VERSION,
+	event: "agent_thought",
 	matchId,
 	...payload,
 });

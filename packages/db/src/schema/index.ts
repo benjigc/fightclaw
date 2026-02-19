@@ -7,3 +7,4 @@ export * from "./match_players";
 export * from "./match_results";
 export * from "./matches";
 export * from "./prompt_versions";
+export * from "./runner_agent_ownership";

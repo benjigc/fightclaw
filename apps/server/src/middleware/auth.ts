@@ -3,6 +3,7 @@ import { createIdentity } from "../appContext";
 import type { AppBindings, AppVariables } from "../appTypes";
 import { sha256Hex } from "../utils/crypto";
 import {
+	badRequest,
 	forbidden,
 	internalServerError,
 	serviceUnavailable,
@@ -16,6 +17,14 @@ const getBearerToken = (authorization?: string) => {
 	const [scheme, token] = authorization.split(" ");
 	if (scheme?.toLowerCase() !== "bearer" || !token) return null;
 	return token.trim();
+};
+
+const RUNNER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$/;
+
+const readRunnerId = (raw?: string | null) => {
+	const value = raw?.trim() ?? "";
+	if (!value) return null;
+	return RUNNER_ID_RE.test(value) ? value : null;
 };
 
 export const requireAdminKey = async (c: AppContext, next: Next) => {
@@ -48,16 +57,23 @@ export const requireRunnerKey = async (c: AppContext, next: Next) => {
 	if (!provided || provided !== expected) {
 		return forbidden(c);
 	}
+	const runnerId = readRunnerId(c.req.header("x-runner-id"));
+	if (!runnerId) {
+		return badRequest(c, "Valid x-runner-id is required.", {
+			code: "invalid_runner_id",
+		});
+	}
 
 	// Internal runner endpoints may override this with an acting-agent identity.
 	c.set(
 		"auth",
 		createIdentity({
-			agentId: "runner",
+			agentId: `runner:${runnerId}`,
 			verifiedAt: null,
 			isAdmin: false,
 		}),
 	);
+	c.set("runnerId", runnerId);
 
 	return next();
 };

@@ -50,6 +50,7 @@ Local URLs:
 - `pnpm run dev:web` - run only the web app
 - `pnpm run dev:server` - run only the server app
 - `pnpm -C apps/agent-cli run dev -- <command>` - run the local agent harness
+- `pnpm -C apps/openclaw-runner run dev -- duel ...` - run gateway-oriented two-agent duel harness
 - `pnpm run build` - build all apps/packages
 - `pnpm run check` - format + lint with Biome
 - `pnpm run check-types` - TypeScript checks across the workspace

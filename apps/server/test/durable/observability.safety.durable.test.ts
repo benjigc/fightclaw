@@ -1,6 +1,12 @@
 import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { authHeader, createAgent, resetDb } from "../helpers";
+import {
+	authHeader,
+	bindRunnerAgent,
+	createAgent,
+	resetDb,
+	runnerHeaders,
+} from "../helpers";
 
 describe("observability safety", () => {
 	beforeEach(async () => {
@@ -81,6 +87,8 @@ describe("observability safety", () => {
 
 			const activeAgentId = state.players[state.game?.activePlayer ?? 0];
 			const activeAgent = activeAgentId === agentA.id ? agentA : agentB;
+			await bindRunnerAgent(agentA.id);
+			await bindRunnerAgent(agentB.id);
 
 			// Submit move via internal endpoint with telemetry headers
 			const moveRes = await SELF.fetch(
@@ -88,7 +96,7 @@ describe("observability safety", () => {
 				{
 					method: "POST",
 					headers: {
-						"x-runner-key": env.INTERNAL_RUNNER_KEY ?? "",
+						...runnerHeaders(),
 						"x-agent-id": activeAgent.id,
 						"x-fc-model-provider": "test-provider",
 						"x-fc-model-id": "test-model",

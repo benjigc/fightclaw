@@ -1,7 +1,13 @@
 import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { authHeader, createAgent, resetDb } from "../helpers";
+import {
+	authHeader,
+	bindRunnerAgent,
+	createAgent,
+	resetDb,
+	runnerHeaders,
+} from "../helpers";
 
 const expectErrorEnvelope = (body: unknown) => {
 	const record = body as Record<string, unknown>;
@@ -68,16 +74,17 @@ describe("error envelope contracts", () => {
 
 	it("internal endpoints return { ok: false, error } for invalid match id", async () => {
 		expect(env.INTERNAL_RUNNER_KEY).toBeTruthy();
-		const runnerKey = env.INTERNAL_RUNNER_KEY as string;
+		const boundAgent = await createAgent("Bound", "bound-key");
+		await bindRunnerAgent(boundAgent.id);
 
 		const res = await SELF.fetch(
 			"https://example.com/v1/internal/matches/not-a-uuid/move",
 			{
 				method: "POST",
 				headers: {
+					...runnerHeaders(),
 					"content-type": "application/json",
-					"x-runner-key": runnerKey,
-					"x-agent-id": crypto.randomUUID(),
+					"x-agent-id": boundAgent.id,
 				},
 				body: JSON.stringify({
 					moveId: "m-1",

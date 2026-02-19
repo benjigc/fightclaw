@@ -23,6 +23,7 @@ const movePayloadSchema = z
 		moveId: z.string().min(1),
 		expectedVersion: z.number().int(),
 		move: z.unknown(),
+		publicThought: z.string().max(2_000).optional(),
 	})
 	.strict();
 
@@ -50,14 +51,43 @@ const getMatchStub = (c: { env: AppBindings }, matchId: string) => {
 	return c.env.MATCH.get(id);
 };
 
+const isMatchPublicForSpectators = async (
+	c: AppContext,
+	matchId: string,
+	options?: { unknownMatchIsPublic?: boolean },
+) => {
+	const matchRow = await c.env.DB.prepare(
+		"SELECT status FROM matches WHERE id = ? LIMIT 1",
+	)
+		.bind(matchId)
+		.first<{ status: string | null }>();
+
+	if (!matchRow?.status) {
+		return options?.unknownMatchIsPublic ?? false;
+	}
+
+	if (matchRow.status === "ended") return true;
+	if (matchRow.status !== "active") return false;
+
+	try {
+		const stub = getMatchmakerStub(c);
+		const featuredResp = await doFetchWithRetry(stub, "https://do/featured", {
+			headers: { "x-request-id": c.get("requestId") },
+		});
+		if (!featuredResp.ok) return false;
+		const featured = (await featuredResp.json()) as { matchId?: unknown };
+		return typeof featured.matchId === "string" && featured.matchId === matchId;
+	} catch {
+		return false;
+	}
+};
+
 const submitMove = async (
 	c: AppContext,
+	matchId: string,
 	agentId: string,
 	options?: { telemetryHeaders?: Record<string, string> },
 ) => {
-	const matchIdResult = parseUuidParam(c, "id", "Match id");
-	if (!matchIdResult.ok) return matchIdResult.response;
-
 	const jsonResult = await parseJson(c);
 	if (!jsonResult.ok) {
 		return badRequest(c, "Invalid JSON body.");
@@ -68,11 +98,11 @@ const submitMove = async (
 		return badRequest(c, "Invalid move payload.");
 	}
 
-	const stub = getMatchStub(c, matchIdResult.value);
+	const stub = getMatchStub(c, matchId);
 	const headers: Record<string, string> = {
 		"content-type": "application/json",
 		"x-agent-id": agentId,
-		"x-match-id": matchIdResult.value,
+		"x-match-id": matchId,
 		"x-request-id": c.get("requestId"),
 	};
 	if (options?.telemetryHeaders) {
@@ -96,12 +126,42 @@ export const matchesRoutes = new Hono<{
 matchesRoutes.post("/v1/matches/:id/move", async (c) => {
 	const agentId = c.get("agentId");
 	if (!agentId) return unauthorized(c);
-	return submitMove(c, agentId);
+	const matchIdResult = parseUuidParam(c, "id", "Match id");
+	if (!matchIdResult.ok) return matchIdResult.response;
+	return submitMove(c, matchIdResult.value, agentId);
 });
 
 matchesRoutes.post("/v1/internal/matches/:id/move", async (c) => {
+	const matchIdResult = parseUuidParam(c, "id", "Match id");
+	if (!matchIdResult.ok) return matchIdResult.response;
+
+	const runnerId = c.get("runnerId");
+	if (!runnerId) return unauthorized(c);
 	const agentId = c.req.header("x-agent-id");
 	if (!agentId) return badRequest(c, "Agent id is required.");
+
+	const ownership = await c.env.DB.prepare(
+		[
+			"SELECT revoked_at",
+			"FROM runner_agent_ownership",
+			"WHERE runner_id = ? AND agent_id = ?",
+			"LIMIT 1",
+		].join(" "),
+	)
+		.bind(runnerId, agentId)
+		.first<{ revoked_at: string | null }>();
+	if (!ownership || ownership.revoked_at) {
+		return c.json(
+			{
+				ok: false,
+				error: "Runner is not authorized for this agent.",
+				code: "runner_agent_not_bound",
+				requestId: c.get("requestId"),
+			},
+			403,
+		);
+	}
+
 	c.set("agentId", agentId);
 	c.set("auth", createIdentity({ agentId }));
 
@@ -118,7 +178,7 @@ matchesRoutes.post("/v1/internal/matches/:id/move", async (c) => {
 		if (value) telemetryHeaders[key] = value;
 	}
 
-	return submitMove(c, agentId, { telemetryHeaders });
+	return submitMove(c, matchIdResult.value, agentId, { telemetryHeaders });
 });
 
 matchesRoutes.post("/v1/internal/__test__/reset", async (c) => {
@@ -133,7 +193,10 @@ matchesRoutes.post("/v1/internal/__test__/reset", async (c) => {
 			const stub = getMatchmakerStub(c);
 			const resp = await stub.fetch("https://do/__test__/reset", {
 				method: "POST",
-				headers: withRequestId(c, { "x-runner-key": expected }),
+				headers: withRequestId(c, {
+					"x-runner-key": expected,
+					"x-runner-id": "test-runner",
+				}),
 			});
 			if (resp.ok) return c.json({ ok: true });
 		} catch (error) {
@@ -236,23 +299,7 @@ matchesRoutes.get("/v1/matches/:id/log", async (c) => {
 		return notFound(c, "Match not found.");
 	}
 
-	let isPublic = matchRow.status === "ended";
-	if (!isPublic && matchRow.status === "active") {
-		try {
-			const stub = getMatchmakerStub(c);
-			const featuredResp = await doFetchWithRetry(stub, "https://do/featured", {
-				headers: { "x-request-id": c.get("requestId") },
-			});
-			if (featuredResp.ok) {
-				const featured = (await featuredResp.json()) as { matchId?: unknown };
-				if (featured && typeof featured.matchId === "string") {
-					isPublic = featured.matchId === matchIdResult.value;
-				}
-			}
-		} catch {
-			// Treat featured lookup failure as non-public.
-		}
-	}
+	const isPublic = await isMatchPublicForSpectators(c, matchIdResult.value);
 
 	if (!isPublic) {
 		const provided = c.req.header("x-admin-key");
@@ -322,54 +369,13 @@ matchesRoutes.get("/v1/matches/:id/stream", async (c) => {
 	return adaptDoErrorEnvelope(response);
 });
 
-matchesRoutes.get("/v1/matches/:id/events", async (c) => {
+const handleSpectateStream = async (c: AppContext) => {
 	const matchIdResult = parseUuidParam(c, "id", "Match id");
 	if (!matchIdResult.ok) return matchIdResult.response;
 
-	const stub = getMatchStub(c, matchIdResult.value);
-	const response = await stub.fetch("https://do/events", {
-		signal: c.req.raw.signal,
-		headers: {
-			"x-match-id": matchIdResult.value,
-			"x-request-id": c.get("requestId"),
-		},
+	const isPublic = await isMatchPublicForSpectators(c, matchIdResult.value, {
+		unknownMatchIsPublic: true,
 	});
-	return adaptDoErrorEnvelope(response);
-});
-
-matchesRoutes.get("/v1/matches/:id/spectate", async (c) => {
-	const matchIdResult = parseUuidParam(c, "id", "Match id");
-	if (!matchIdResult.ok) return matchIdResult.response;
-
-	const matchRow = await c.env.DB.prepare(
-		"SELECT status FROM matches WHERE id = ? LIMIT 1",
-	)
-		.bind(matchIdResult.value)
-		.first<{ status: string | null }>();
-
-	// Keep unknown match ids public for compatibility; enforce visibility only
-	// when we know a currently-active match exists.
-	let isPublic = !matchRow?.status || matchRow.status === "ended";
-	if (!isPublic && matchRow?.status === "active") {
-		try {
-			const matchmaker = getMatchmakerStub(c);
-			const featuredResp = await doFetchWithRetry(
-				matchmaker,
-				"https://do/featured",
-				{
-					headers: { "x-request-id": c.get("requestId") },
-				},
-			);
-			if (featuredResp.ok) {
-				const featured = (await featuredResp.json()) as { matchId?: unknown };
-				if (featured && typeof featured.matchId === "string") {
-					isPublic = featured.matchId === matchIdResult.value;
-				}
-			}
-		} catch {
-			// Treat featured lookup failure as non-public.
-		}
-	}
 
 	if (!isPublic) {
 		const provided = c.req.header("x-admin-key");
@@ -387,4 +393,9 @@ matchesRoutes.get("/v1/matches/:id/spectate", async (c) => {
 		},
 	});
 	return adaptDoErrorEnvelope(response);
-});
+};
+
+matchesRoutes.get("/v1/matches/:id/spectate", handleSpectateStream);
+
+// Backward-compatible alias of `/spectate`.
+matchesRoutes.get("/v1/matches/:id/events", handleSpectateStream);

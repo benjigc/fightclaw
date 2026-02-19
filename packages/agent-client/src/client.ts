@@ -93,11 +93,16 @@ const matchStateSchema = z
 					.object({
 						activePlayer: z.string().optional(),
 						players: z
-							.record(z.string(), z.object({ id: z.string().optional() }))
+							.record(
+								z.string(),
+								z.object({ id: z.string().optional() }).passthrough(),
+							)
 							.optional(),
 					})
+					.passthrough()
 					.optional(),
 			})
+			.passthrough()
 			.nullable(),
 	})
 	.passthrough();

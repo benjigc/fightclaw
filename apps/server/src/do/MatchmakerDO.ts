@@ -28,6 +28,7 @@ const RECENT_PREFIX = "recent:";
 const QUEUE_TTL_MS = 10 * 60 * 1000;
 const FEATURED_STREAM_INTERVAL_MS = 1000;
 const WS_QUEUE_LEAVE_GRACE_MS = 15_000;
+const RUNNER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$/;
 
 type MatchmakerEnv = {
 	DB: D1Database;
@@ -1056,8 +1057,21 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 				response: Response.json({ error: "Forbidden." }, { status: 403 }),
 			};
 		}
+		const runnerId = request.headers.get("x-runner-id")?.trim() ?? "";
+		if (!RUNNER_ID_RE.test(runnerId)) {
+			return {
+				ok: false as const,
+				response: Response.json(
+					{
+						error: "Valid x-runner-id is required.",
+						code: "invalid_runner_id",
+					},
+					{ status: 400 },
+				),
+			};
+		}
 
-		return { ok: true as const };
+		return { ok: true as const, runnerId };
 	}
 
 	private async resolveFeatured(options?: {

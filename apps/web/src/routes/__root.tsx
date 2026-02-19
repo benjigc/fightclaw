@@ -1,3 +1,8 @@
+import { env } from "@fightclaw/env/web";
+import {
+	PROTOCOL_VERSION,
+	type SystemVersionResponse,
+} from "@fightclaw/protocol";
 import {
 	createRootRouteWithContext,
 	HeadContent,
@@ -5,7 +10,7 @@ import {
 	Outlet,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
-
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/sonner";
 
 import "../index.css";
@@ -41,6 +46,29 @@ const NAV_LINKS = [
 ];
 
 function RootComponent() {
+	useEffect(() => {
+		let active = true;
+		const checkProtocolVersion = async () => {
+			try {
+				const res = await fetch(`${env.VITE_SERVER_URL}/v1/system/version`);
+				if (!res.ok) return;
+				const json = (await res.json()) as Partial<SystemVersionResponse>;
+				if (!active) return;
+				if (json.protocolVersion !== PROTOCOL_VERSION) {
+					console.warn(
+						`[fightclaw] protocol mismatch web=${PROTOCOL_VERSION} server=${json.protocolVersion ?? "unknown"}`,
+					);
+				}
+			} catch {
+				// Non-blocking.
+			}
+		};
+		void checkProtocolVersion();
+		return () => {
+			active = false;
+		};
+	}, []);
+
 	return (
 		<>
 			<HeadContent />

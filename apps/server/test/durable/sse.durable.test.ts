@@ -1,6 +1,13 @@
 import { SELF } from "cloudflare:test";
+import { currentPlayer, listLegalMoves } from "@fightclaw/engine";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { readSseUntil, resetDb, setupMatch } from "../helpers";
+import {
+	bindRunnerAgent,
+	readSseUntil,
+	resetDb,
+	runnerHeaders,
+	setupMatch,
+} from "../helpers";
 
 beforeEach(async () => {
 	await resetDb();
@@ -136,6 +143,85 @@ it(
 					return record.type === "fortify" && typeof record.at === "string";
 				}),
 			).toBe(true);
+		} finally {
+			await stream.close();
+		}
+	},
+	TEST_TIMEOUT_MS,
+);
+
+it(
+	"events stream emits sanitized agent_thought for accepted internal moves",
+	async () => {
+		const { matchId, agentA, agentB } = await setupMatch();
+		await bindRunnerAgent(agentA.id);
+		await bindRunnerAgent(agentB.id);
+
+		const stream = await openSse(
+			`https://example.com/v1/matches/${matchId}/events`,
+		);
+
+		try {
+			const waitForThought = readSseUntil(
+				stream.res,
+				(value) => value.includes("event: agent_thought"),
+				SSE_TIMEOUT_MS,
+				SSE_MAX_BYTES,
+				{ throwOnTimeout: true, label: "agent_thought" },
+			);
+
+			const stateRes = await SELF.fetch(
+				`https://example.com/v1/matches/${matchId}/state`,
+			);
+			const stateJson = (await stateRes.json()) as {
+				state: {
+					stateVersion: number;
+					game: Parameters<typeof listLegalMoves>[0];
+				} | null;
+			};
+			const state = stateJson.state;
+			expect(state).toBeTruthy();
+			const game = state?.game;
+			if (!game) throw new Error("Missing game state.");
+			const activeAgentId = currentPlayer(game);
+			const move = listLegalMoves(game)[0];
+			if (!move) throw new Error("No legal move available.");
+
+			await SELF.fetch(
+				`https://example.com/v1/internal/matches/${matchId}/move`,
+				{
+					method: "POST",
+					headers: {
+						...runnerHeaders(),
+						"content-type": "application/json",
+						"x-agent-id": activeAgentId,
+					},
+					body: JSON.stringify({
+						moveId: crypto.randomUUID(),
+						expectedVersion: state?.stateVersion ?? 0,
+						move,
+						publicThought: "  Attack now.\nKeep pressure. \u0007  ",
+					}),
+				},
+			);
+
+			const result = await waitForThought;
+			const frame =
+				result.framesPreview.find((value) =>
+					value.includes("event: agent_thought"),
+				) ?? null;
+			expect(frame).toBeTruthy();
+			const dataLine =
+				frame?.split("\n").find((line) => line.startsWith("data: ")) ?? null;
+			expect(dataLine).toBeTruthy();
+			const payload = JSON.parse(String(dataLine).slice("data: ".length)) as {
+				event?: string;
+				text?: string;
+				player?: string;
+			};
+			expect(payload.event).toBe("agent_thought");
+			expect(payload.player === "A" || payload.player === "B").toBe(true);
+			expect(payload.text).toBe("Attack now. Keep pressure.");
 		} finally {
 			await stream.close();
 		}

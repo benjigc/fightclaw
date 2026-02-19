@@ -8,11 +8,11 @@ import {
 	type Move,
 } from "@fightclaw/engine";
 import { env } from "@fightclaw/env/web";
+import type { AgentThoughtEvent } from "@fightclaw/protocol";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { HexBoard } from "@/components/arena/hex-board";
-import { ThoughtPanel } from "@/components/arena/thought-panel";
+import { SpectatorArena } from "@/components/arena/spectator-arena";
 import {
 	type EngineEventsEnvelopeV1,
 	useArenaAnimator,
@@ -58,6 +58,7 @@ function SpectatorLanding() {
 	const [thoughtsB, setThoughtsB] = useState<string[]>([]);
 	const [isThinkingA, setIsThinkingA] = useState(false);
 	const [isThinkingB, setIsThinkingB] = useState(false);
+	const thoughtEventIdsRef = useRef(new Set<string>());
 
 	const matchId = replayMatchId ?? featured?.matchId ?? null;
 
@@ -114,6 +115,7 @@ function SpectatorLanding() {
 			setThoughtsB([]);
 			setIsThinkingA(false);
 			setIsThinkingB(false);
+			thoughtEventIdsRef.current.clear();
 			return;
 		}
 
@@ -125,6 +127,7 @@ function SpectatorLanding() {
 		setThoughtsB([]);
 		setIsThinkingA(false);
 		setIsThinkingB(false);
+		thoughtEventIdsRef.current.clear();
 
 		const fetchState = async () => {
 			try {
@@ -148,7 +151,7 @@ function SpectatorLanding() {
 		void fetchState();
 
 		const eventSource = new EventSource(
-			`${env.VITE_SERVER_URL}/v1/matches/${matchId}/events`,
+			`${env.VITE_SERVER_URL}/v1/matches/${matchId}/spectate`,
 		);
 
 		const handleStateEvent = (event: MessageEvent<string>) => {
@@ -187,14 +190,24 @@ function SpectatorLanding() {
 		};
 
 		const handleAgentThought = (event: MessageEvent<string>) => {
-			let payload: { player: "A" | "B"; text: string } | null = null;
+			let payload: AgentThoughtEvent | null = null;
 			try {
-				payload = JSON.parse(event.data) as { player: "A" | "B"; text: string };
+				payload = JSON.parse(event.data) as AgentThoughtEvent;
 			} catch {
 				return;
 			}
 			if (!payload) return;
 			if (!active) return;
+			if (
+				payload.eventVersion !== 1 ||
+				payload.event !== "agent_thought" ||
+				(payload.player !== "A" && payload.player !== "B")
+			) {
+				return;
+			}
+			const id = `${payload.stateVersion}:${payload.moveId}:${payload.player}`;
+			if (thoughtEventIdsRef.current.has(id)) return;
+			thoughtEventIdsRef.current.add(id);
 
 			const { player: p, text } = payload;
 			const setter = p === "A" ? setThoughtsA : setThoughtsB;
@@ -239,6 +252,7 @@ function SpectatorLanding() {
 		setThoughtsB([]);
 		setIsThinkingA(false);
 		setIsThinkingB(false);
+		thoughtEventIdsRef.current.clear();
 
 		const runReplay = async () => {
 			try {
@@ -289,6 +303,31 @@ function SpectatorLanding() {
 				const moveRows = json.events
 					.filter((event) => event.eventType === "move_applied")
 					.sort((a, b) => a.id - b.id);
+				const thoughtByMoveId = new Map<
+					string,
+					Array<{ player: "A" | "B"; text: string; stateVersion: number }>
+				>();
+				for (const row of json.events) {
+					if (row.eventType !== "agent_thought") continue;
+					const payload = isRecord(row.payload) ? row.payload : null;
+					const moveId =
+						typeof payload?.moveId === "string" ? payload.moveId : null;
+					const player = payload?.player;
+					const text = payload?.text;
+					const stateVersion = payload?.stateVersion;
+					if (
+						!moveId ||
+						(player !== "A" && player !== "B") ||
+						typeof text !== "string" ||
+						typeof stateVersion !== "number" ||
+						!Number.isFinite(stateVersion)
+					) {
+						continue;
+					}
+					const existing = thoughtByMoveId.get(moveId) ?? [];
+					existing.push({ player, text, stateVersion });
+					thoughtByMoveId.set(moveId, existing);
+				}
 
 				let replayed = 0;
 
@@ -337,6 +376,21 @@ function SpectatorLanding() {
 					};
 
 					enqueueEngineEvents(envelope, { postState: state });
+					const thoughts = thoughtByMoveId.get(moveId) ?? [];
+					for (const thought of thoughts) {
+						const id = `${thought.stateVersion}:${moveId}:${thought.player}`;
+						if (thoughtEventIdsRef.current.has(id)) continue;
+						thoughtEventIdsRef.current.add(id);
+						if (thought.player === "A") {
+							setThoughtsA((prev) =>
+								[...prev, thought.text].slice(-MAX_THOUGHTS),
+							);
+						} else {
+							setThoughtsB((prev) =>
+								[...prev, thought.text].slice(-MAX_THOUGHTS),
+							);
+						}
+					}
 					replayed += 1;
 				}
 
@@ -366,7 +420,7 @@ function SpectatorLanding() {
 		let active = true;
 
 		const eventSource = new EventSource(
-			`${env.VITE_SERVER_URL}/v1/matches/${replayMatchId}/events`,
+			`${env.VITE_SERVER_URL}/v1/matches/${replayMatchId}/spectate`,
 		);
 
 		const handleStateEvent = (event: MessageEvent<string>) => {
@@ -403,10 +457,40 @@ function SpectatorLanding() {
 			enqueueEngineEvents(payload);
 		};
 
+		const handleAgentThought = (event: MessageEvent<string>) => {
+			let payload: AgentThoughtEvent | null = null;
+			try {
+				payload = JSON.parse(event.data) as AgentThoughtEvent;
+			} catch {
+				return;
+			}
+			if (
+				!payload ||
+				payload.eventVersion !== 1 ||
+				payload.event !== "agent_thought" ||
+				(payload.player !== "A" && payload.player !== "B")
+			) {
+				return;
+			}
+			if (!active) return;
+			const id = `${payload.stateVersion}:${payload.moveId}:${payload.player}`;
+			if (thoughtEventIdsRef.current.has(id)) return;
+			thoughtEventIdsRef.current.add(id);
+			if (payload.player === "A") {
+				setThoughtsA((prev) => [...prev, payload.text].slice(-MAX_THOUGHTS));
+			} else {
+				setThoughtsB((prev) => [...prev, payload.text].slice(-MAX_THOUGHTS));
+			}
+		};
+
 		eventSource.addEventListener("state", handleStateEvent as EventListener);
 		eventSource.addEventListener(
 			"engine_events",
 			handleEngineEvents as EventListener,
+		);
+		eventSource.addEventListener(
+			"agent_thought",
+			handleAgentThought as EventListener,
 		);
 
 		return () => {
@@ -431,63 +515,20 @@ function SpectatorLanding() {
 	}, [connectionStatus]);
 
 	return (
-		<div className="spectator-landing">
-			{/* Game-aware top bar */}
-			<div className="spectator-top-bar">
-				<span className="status-badge">{statusBadge}</span>
-				<span className="top-bar-center">
-					{latestState ? (
-						<>
-							T{latestState.turn}{" "}
-							<span
-								className={
-									latestState.activePlayer === "A"
-										? "player-a-color"
-										: "player-b-color"
-								}
-							>
-								{latestState.activePlayer}
-							</span>{" "}
-							| AP {latestState.actionsRemaining}
-							{hudFx.passPulse ? " | PASS" : ""}
-						</>
-					) : (
-						"WAR OF ATTRITION"
-					)}
-				</span>
-			</div>
-
-			{/* Three-column layout: thought panel | board | thought panel */}
-			<div className="spectator-main">
-				<ThoughtPanel
-					player="A"
-					thoughts={thoughtsA}
-					isThinking={isThinkingA}
-				/>
-
-				<div className="hex-board-container">
-					{latestState ? (
-						<HexBoard
-							state={latestState}
-							effects={effects}
-							unitAnimStates={unitAnimStates}
-							dyingUnitIds={dyingUnitIds}
-							damageNumbers={damageNumbers}
-							lungeTargets={lungeTargets}
-							activePlayer={latestState?.activePlayer}
-						/>
-					) : (
-						<div className="muted">Awaiting state stream...</div>
-					)}
-				</div>
-
-				<ThoughtPanel
-					player="B"
-					thoughts={thoughtsB}
-					isThinking={isThinkingB}
-				/>
-			</div>
-		</div>
+		<SpectatorArena
+			statusBadge={statusBadge}
+			state={latestState}
+			thoughtsA={thoughtsA}
+			thoughtsB={thoughtsB}
+			isThinkingA={isThinkingA}
+			isThinkingB={isThinkingB}
+			hudPassPulse={hudFx.passPulse}
+			effects={effects}
+			unitAnimStates={unitAnimStates}
+			dyingUnitIds={dyingUnitIds}
+			damageNumbers={damageNumbers}
+			lungeTargets={lungeTargets}
+		/>
 	);
 }
 
