@@ -227,7 +227,10 @@ function inferBoardColumnsFromBoard(board: HexState[]): 17 | 21 {
 // ---------------------------------------------------------------------------
 
 export function parseHexId(id: HexId): { row: number; col: number } {
-	const rowChar = id[0]!;
+	const rowChar = id[0];
+	if (!rowChar) {
+		throw new Error(`Invalid hex id: ${id}`);
+	}
 	const colStr = id.slice(1);
 	return {
 		row: rowChar.charCodeAt(0) - 65,
@@ -246,7 +249,8 @@ function hexIdIndex(id: HexId, boardColumns: 17 | 21): number {
 
 function isValidHexId(s: string, boardColumns: 17 | 21): boolean {
 	if (s.length < 2 || s.length > 3) return false;
-	const rowChar = s[0]!;
+	const rowChar = s[0];
+	if (!rowChar) return false;
 	const rowIdx = rowChar.charCodeAt(0) - 65;
 	if (rowIdx < 0 || rowIdx >= ROWS) return false;
 	const colNum = Number(s.slice(1));
@@ -313,10 +317,11 @@ function bfsDistance(
 	const queue: Array<{ id: HexId; dist: number }> = [{ id: start, dist: 0 }];
 	const seen = new Set<HexId>([start]);
 	while (queue.length > 0) {
-		const current = queue.shift()!;
+		const current = queue.shift();
+		if (!current) continue;
 		for (const n of neighborsOf(current.id, boardColumns)) {
 			if (seen.has(n)) continue;
-			if (blocked && blocked.has(n)) continue;
+			if (blocked?.has(n)) continue;
 			if (n === target) return current.dist + 1;
 			seen.add(n);
 			queue.push({ id: n, dist: current.dist + 1 });
@@ -344,7 +349,8 @@ function reachableHexes(
 	const queue: Array<{ id: HexId; dist: number }> = [{ id: start, dist: 0 }];
 	const seen = new Set<HexId>([start]);
 	while (queue.length > 0) {
-		const current = queue.shift()!;
+		const current = queue.shift();
+		if (!current) continue;
 		for (const n of neighborsOf(current.id, boardColumns)) {
 			if (seen.has(n)) continue;
 			if (blocked.has(n)) continue;
@@ -378,7 +384,8 @@ function hasForestFreePath(
 	bestDist.set(start, 0);
 
 	while (queue.length > 0) {
-		const current = queue.shift()!;
+		const current = queue.shift();
+		if (!current) continue;
 		if (current.dist >= pathLen) continue;
 
 		for (const n of neighborsOf(current.id, boardColumns)) {
@@ -1157,10 +1164,18 @@ function buildCanonicalBoard(config: EngineConfig): HexState[] {
 	}
 	const board: HexState[] = [];
 	for (let row = 0; row < ROWS; row++) {
-		const rowTerrain = CANONICAL_TERRAIN[row]!;
+		const rowTerrain = CANONICAL_TERRAIN[row];
+		if (!rowTerrain) {
+			throw new Error(`Missing canonical terrain row ${row}`);
+		}
 		for (let col = 0; col < config.boardColumns; col++) {
 			const canonicalCol = canonicalColForBoardCol(col, config.boardColumns);
-			const token = rowTerrain[canonicalCol]!;
+			const token = rowTerrain[canonicalCol];
+			if (!token) {
+				throw new Error(
+					`Missing canonical terrain token row=${row} col=${canonicalCol}`,
+				);
+			}
 			const hexType = TOKEN_TO_HEX_TYPE[token];
 			const id = toHexId(row, col);
 
@@ -1464,7 +1479,10 @@ function computeLoS(
 		return { clear: false, reason: "No straight line (shared neighbors != 1)" };
 	}
 
-	const midHex = shared[0]!;
+	const midHex = shared[0];
+	if (!midHex) {
+		return { clear: false, reason: "No shared mid hex" };
+	}
 	const targetHex = getHex(state, targetPos);
 	const midHexState = getHex(state, midHex);
 
@@ -1535,8 +1553,11 @@ function computeCombat(
 
 	const leadAttacker =
 		attackers.find((attacker) => attacker.id === initiatingAttackerId) ??
-		attackers[0]!;
-	const leadDefender = defenders[0]!;
+		attackers[0];
+	const leadDefender = defenders[0];
+	if (!leadAttacker || !leadDefender) {
+		throw new Error("Combat requires at least one attacker and one defender");
+	}
 
 	// Attack power: base ATK + attacker bonus + stack bonus + cavalry charge
 	let attackPower = config.unitStats[leadAttacker.type].attack;
@@ -1770,7 +1791,8 @@ function applyControlUpdate(
 	}[] = [];
 	for (const hex of state.board) {
 		if (hex.unitIds.length > 0) {
-			const firstUnit = getUnit(state, hex.unitIds[0]!);
+			const firstUnitId = hex.unitIds[0];
+			const firstUnit = firstUnitId ? getUnit(state, firstUnitId) : null;
 			const nextOwner = firstUnit ? firstUnit.owner : hex.controlledBy;
 			if (nextOwner !== hex.controlledBy) {
 				changes.push({
@@ -2243,7 +2265,7 @@ export function validateMove(
 				};
 			}
 			const targetUnits = getUnitsOnHex(state, m.target);
-			if (targetUnits.length === 0 || targetUnits[0]!.owner === side) {
+			if (targetUnits.length === 0 || targetUnits[0]?.owner === side) {
 				return {
 					ok: false,
 					reason: "illegal_move",
@@ -2500,13 +2522,17 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 			if (defenders.length === 0) {
 				return failMove(nextState, m, "invalid_move", "Defender missing.");
 			}
+			const leadDefender = defenders[0];
+			if (!leadDefender) {
+				return failMove(nextState, m, "invalid_move", "Defender missing.");
+			}
 
 			const attackerFrom = leadAttacker.position;
 			const defenderIds = defenders.map((d) => d.id);
 			const dist =
 				hexDistance(
 					leadAttacker.position,
-					defenders[0]!.position,
+					leadDefender.position,
 					boardColumns,
 				) ?? 0;
 			const ranged = dist > 1;
@@ -2752,7 +2778,7 @@ export function renderAscii(state: MatchState): string {
 	lines.push(`    ${headerCells.join("")}`);
 
 	for (let row = 0; row < ROWS; row++) {
-		const rowLabel = ROW_LETTERS[row]!;
+		const rowLabel = ROW_LETTERS[row] ?? "?";
 		const cells: string[] = [];
 		for (let col = 0; col < cols; col++) {
 			const id = toHexId(row, col);
@@ -2761,8 +2787,8 @@ export function renderAscii(state: MatchState): string {
 				cells.push(" ?? ");
 				continue;
 			}
-			const unit =
-				hex.unitIds.length > 0 ? getUnit(state, hex.unitIds[0]!) : null;
+			const firstUnitId = hex.unitIds[0];
+			const unit = firstUnitId ? getUnit(state, firstUnitId) : null;
 			const owner = unit?.owner ?? hex.controlledBy ?? ".";
 			const stackCount = hex.unitIds.length;
 			const content = unit

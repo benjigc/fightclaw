@@ -223,7 +223,7 @@ function DevLayout() {
 				setReplayError((err as Error).message);
 			}
 		},
-		[resetAnimator],
+		[resetAnimator, bindReplayState],
 	);
 
 	const selectMatch = useCallback(
