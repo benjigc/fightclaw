@@ -11,6 +11,7 @@ export type MatchFoundEvent = EventOf<"match_found">;
 export type YourTurnEvent = EventOf<"your_turn">;
 export type StateEvent = EventOf<"state">;
 export type EngineEventsEvent = EventOf<"engine_events">;
+export type MatchEndedEvent = EventOf<"match_ended">;
 export type GameEndedEvent = EventOf<"game_ended">;
 export type NoEventsEvent = EventOf<"no_events">;
 
@@ -54,19 +55,26 @@ export const buildEngineEventsEvent = (
 	...payload,
 });
 
-export const buildGameEndedEvent = (
+export const buildMatchEndedEvent = (
 	matchId: string,
-	winnerAgentId: GameEndedEvent["winnerAgentId"],
-	loserAgentId: GameEndedEvent["loserAgentId"],
+	winnerAgentId: MatchEndedEvent["winnerAgentId"],
+	loserAgentId: MatchEndedEvent["loserAgentId"],
 	reason: string,
-): GameEndedEvent => ({
+): MatchEndedEvent => ({
 	eventVersion: EVENT_VERSION,
-	event: "game_ended",
+	event: "match_ended",
 	matchId,
 	winnerAgentId,
 	loserAgentId,
 	reason,
 	reasonCode: reason,
+});
+
+export const buildGameEndedAliasEvent = (
+	matchEnded: MatchEndedEvent,
+): GameEndedEvent => ({
+	...matchEnded,
+	event: "game_ended",
 });
 
 export const buildNoEventsEvent = (): NoEventsEvent => ({

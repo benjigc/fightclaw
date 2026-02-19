@@ -2888,6 +2888,15 @@ export const SpectatorEventSchema = z.discriminatedUnion("event", [
 	}),
 	z.object({
 		eventVersion: z.literal(1),
+		event: z.literal("match_ended"),
+		matchId: z.string(),
+		winnerAgentId: z.string().nullable().optional(),
+		loserAgentId: z.string().nullable().optional(),
+		reason: z.string().optional(),
+		reasonCode: z.string().optional(),
+	}),
+	z.object({
+		eventVersion: z.literal(1),
 		event: z.literal("game_ended"),
 		matchId: z.string(),
 		winnerAgentId: z.string().nullable().optional(),
