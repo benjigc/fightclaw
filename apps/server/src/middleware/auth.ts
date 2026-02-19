@@ -1,6 +1,7 @@
 import type { Context, Next } from "hono";
 import { createIdentity } from "../appContext";
 import type { AppBindings, AppVariables } from "../appTypes";
+import { RUNNER_ID_RE } from "../constants/runner";
 import { sha256Hex } from "../utils/crypto";
 import {
 	badRequest,
@@ -18,8 +19,6 @@ const getBearerToken = (authorization?: string) => {
 	if (scheme?.toLowerCase() !== "bearer" || !token) return null;
 	return token.trim();
 };
-
-const RUNNER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$/;
 
 const readRunnerId = (raw?: string | null) => {
 	const value = raw?.trim() ?? "";

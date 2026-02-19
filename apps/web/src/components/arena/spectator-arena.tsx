@@ -46,21 +46,21 @@ export function SpectatorArenaMain({
 		<div className="spectator-main" style={mainStyle}>
 			<ThoughtPanel player="A" thoughts={thoughtsA} isThinking={isThinkingA} />
 
-			<div className="hex-board-container">
-				{state ? (
-					<HexBoard
-						state={state}
-						effects={effects}
-						unitAnimStates={unitAnimStates}
-						dyingUnitIds={dyingUnitIds}
-						damageNumbers={damageNumbers}
-						lungeTargets={lungeTargets}
-						activePlayer={state.activePlayer}
-					/>
-				) : (
+			{state ? (
+				<HexBoard
+					state={state}
+					effects={effects}
+					unitAnimStates={unitAnimStates}
+					dyingUnitIds={dyingUnitIds}
+					damageNumbers={damageNumbers}
+					lungeTargets={lungeTargets}
+					activePlayer={state.activePlayer}
+				/>
+			) : (
+				<div className="spectator-board-empty">
 					<div className="muted">{emptyStateLabel}</div>
-				)}
-			</div>
+				</div>
+			)}
 
 			<ThoughtPanel player="B" thoughts={thoughtsB} isThinking={isThinkingB} />
 		</div>
