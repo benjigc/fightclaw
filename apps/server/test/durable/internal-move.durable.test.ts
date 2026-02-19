@@ -1,7 +1,12 @@
-import { env, SELF } from "cloudflare:test";
+import { SELF } from "cloudflare:test";
 import { currentPlayer, listLegalMoves } from "@fightclaw/engine";
 import { beforeEach, expect, it } from "vitest";
-import { resetDb, setupMatch } from "../helpers";
+import {
+	bindRunnerAgent,
+	resetDb,
+	runnerHeaders,
+	setupMatch,
+} from "../helpers";
 
 beforeEach(async () => {
 	await resetDb();
@@ -30,6 +35,8 @@ it("requires runner key for internal move", async () => {
 
 it("accepts runner key + agent id", async () => {
 	const { matchId, agentA, agentB } = await setupMatch();
+	await bindRunnerAgent(agentA.id);
+	await bindRunnerAgent(agentB.id);
 	const stateRes = await SELF.fetch(
 		`https://example.com/v1/matches/${matchId}/state`,
 	);
@@ -50,8 +57,8 @@ it("accepts runner key + agent id", async () => {
 		{
 			method: "POST",
 			headers: {
+				...runnerHeaders(),
 				"content-type": "application/json",
-				"x-runner-key": env.INTERNAL_RUNNER_KEY ?? "",
 				"x-agent-id": actingId,
 			},
 			body: JSON.stringify({
@@ -63,4 +70,34 @@ it("accepts runner key + agent id", async () => {
 	);
 
 	expect([200, 400, 409]).toContain(res.status);
+});
+
+it("rejects internal move for unbound runner-agent pair", async () => {
+	const { matchId, agentA } = await setupMatch();
+	const stateRes = await SELF.fetch(
+		`https://example.com/v1/matches/${matchId}/state`,
+	);
+	const payload = (await stateRes.json()) as {
+		state: { stateVersion: number } | null;
+	};
+	const res = await SELF.fetch(
+		`https://example.com/v1/internal/matches/${matchId}/move`,
+		{
+			method: "POST",
+			headers: {
+				...runnerHeaders(),
+				"content-type": "application/json",
+				"x-agent-id": agentA.id,
+			},
+			body: JSON.stringify({
+				moveId: crypto.randomUUID(),
+				expectedVersion: payload.state?.stateVersion ?? 0,
+				move: { action: "pass" },
+			}),
+		},
+	);
+
+	expect(res.status).toBe(403);
+	const json = (await res.json()) as { code?: string };
+	expect(json.code).toBe("runner_agent_not_bound");
 });

@@ -1,6 +1,12 @@
 import { env, SELF } from "cloudflare:test";
 import { beforeEach, expect, it } from "vitest";
-import { authHeader, createAgent, pollUntil, resetDb } from "../helpers";
+import {
+	authHeader,
+	createAgent,
+	pollUntil,
+	resetDb,
+	runnerHeaders,
+} from "../helpers";
 
 beforeEach(async () => {
 	await resetDb();
@@ -122,8 +128,8 @@ it("dedupes featured queue entries", async () => {
 	await stub.fetch("https://do/featured/queue", {
 		method: "POST",
 		headers: {
+			...runnerHeaders(),
 			"content-type": "application/json",
-			"x-runner-key": env.INTERNAL_RUNNER_KEY ?? "",
 		},
 		body: JSON.stringify({
 			matchId: matchTwo,
@@ -132,9 +138,7 @@ it("dedupes featured queue entries", async () => {
 	});
 
 	const queueRes = await stub.fetch("https://do/featured/queue", {
-		headers: {
-			"x-runner-key": env.INTERNAL_RUNNER_KEY ?? "",
-		},
+		headers: runnerHeaders(),
 	});
 	const queueJson = (await queueRes.json()) as {
 		featured: string | null;

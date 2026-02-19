@@ -14,6 +14,7 @@
 		"@fightclaw/db": "workspace:*",
 		"@fightclaw/engine": "workspace:*",
 		"@fightclaw/env": "workspace:*",
+		"@fightclaw/protocol": "workspace:*",
 		"@sentry/cloudflare": "^10.38.0",
 		"dotenv": "catalog:",
 		"hono": "^4.8.2",

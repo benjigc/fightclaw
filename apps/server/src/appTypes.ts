@@ -36,6 +36,7 @@ export type AppBindings = {
 	SENTRY_DSN?: string;
 	SENTRY_ENVIRONMENT?: string;
 	SENTRY_TRACES_SAMPLE_RATE?: string;
+	CF_VERSION_METADATA?: Record<string, unknown>;
 };
 
 export type AppVariables = {
@@ -44,4 +45,5 @@ export type AppVariables = {
 	auth?: AuthIdentity;
 	// Back-compat bridge while other code still reads agentId directly.
 	agentId?: string;
+	runnerId?: string;
 };

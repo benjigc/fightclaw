@@ -1,3 +1,9 @@
+import {
+	CONTRACTS_VERSION,
+	ENGINE_VERSION,
+	PROTOCOL_VERSION,
+	type SystemVersionResponse,
+} from "@fightclaw/protocol";
 import { Hono } from "hono";
 
 import type { AppBindings, AppVariables } from "../appTypes";
@@ -32,6 +38,35 @@ systemRoutes.get("/v1/leaderboard", async (c) => {
 		console.error("Failed to load leaderboard", error);
 		return internalServerError(c, "Leaderboard unavailable");
 	}
+});
+
+systemRoutes.get("/v1/system/version", (c) => {
+	const metadata = c.env.CF_VERSION_METADATA;
+	const record =
+		metadata && typeof metadata === "object" && !Array.isArray(metadata)
+			? (metadata as Record<string, unknown>)
+			: null;
+	const body: SystemVersionResponse = {
+		gitSha:
+			typeof record?.gitSha === "string"
+				? record.gitSha
+				: typeof record?.id === "string"
+					? record.id
+					: typeof record?.commitHash === "string"
+						? record.commitHash
+						: null,
+		buildTime:
+			typeof record?.buildTime === "string"
+				? record.buildTime
+				: typeof record?.timestamp === "string"
+					? record.timestamp
+					: null,
+		contractsVersion: CONTRACTS_VERSION,
+		protocolVersion: PROTOCOL_VERSION,
+		engineVersion: ENGINE_VERSION,
+		environment: c.env.SENTRY_ENVIRONMENT ?? null,
+	};
+	return c.json(body);
 });
 
 systemRoutes.get("/v1/agents/:id", async (c) => {

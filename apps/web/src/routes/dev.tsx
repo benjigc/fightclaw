@@ -10,8 +10,7 @@ import {
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { HexBoard } from "@/components/arena/hex-board";
-import { ThoughtPanel } from "@/components/arena/thought-panel";
+import { SpectatorArenaMain } from "@/components/arena/spectator-arena";
 import {
 	type EngineEventsEnvelopeV1,
 	useArenaAnimator,
@@ -389,24 +388,19 @@ function DevLayout() {
 			</div>
 
 			<div className="dev-main">
-				{/* Three-column spectator grid with BOTH thought panels */}
-				<div className="spectator-main" style={{ height: "100%" }}>
-					<ThoughtPanel player="A" thoughts={[]} isThinking={false} />
-
-					<div className="hex-board-container">
-						<HexBoard
-							state={boardState}
-							effects={effects}
-							unitAnimStates={unitAnimStates}
-							dyingUnitIds={dyingUnitIds}
-							damageNumbers={damageNumbers}
-							lungeTargets={lungeTargets}
-							activePlayer={boardState.activePlayer}
-						/>
-					</div>
-
-					<ThoughtPanel player="B" thoughts={[]} isThinking={false} />
-				</div>
+				<SpectatorArenaMain
+					state={boardState}
+					thoughtsA={[]}
+					thoughtsB={[]}
+					isThinkingA={false}
+					isThinkingB={false}
+					mainStyle={{ height: "100%" }}
+					effects={effects}
+					unitAnimStates={unitAnimStates}
+					dyingUnitIds={dyingUnitIds}
+					damageNumbers={damageNumbers}
+					lungeTargets={lungeTargets}
+				/>
 
 				{/* Horizontal dev controls bar */}
 				<div className="dev-panel">

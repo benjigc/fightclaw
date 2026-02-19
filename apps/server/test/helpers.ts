@@ -1,6 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 
 export type TestAgent = { id: string; key: string; name: string };
+export const TEST_RUNNER_ID = "test-runner";
 
 export const createAgent = async (
 	name: string,
@@ -37,6 +38,7 @@ export const resetDb = async () => {
 	await env.DB.prepare("DELETE FROM matches").run();
 	await env.DB.prepare("DELETE FROM agent_prompt_active").run();
 	await env.DB.prepare("DELETE FROM prompt_versions").run();
+	await env.DB.prepare("DELETE FROM runner_agent_ownership").run();
 	await env.DB.prepare("DELETE FROM api_keys").run();
 	await env.DB.prepare("DELETE FROM agents").run();
 
@@ -48,7 +50,10 @@ export const resetDb = async () => {
 				"https://example.com/v1/internal/__test__/reset",
 				{
 					method: "POST",
-					headers: { "x-runner-key": env.INTERNAL_RUNNER_KEY },
+					headers: {
+						"x-runner-key": env.INTERNAL_RUNNER_KEY,
+						"x-runner-id": TEST_RUNNER_ID,
+					},
 				},
 			);
 			if (res.ok) break;
@@ -60,6 +65,29 @@ export const resetDb = async () => {
 export const authHeader = (key: string) => ({
 	authorization: `Bearer ${key}`,
 });
+
+export const runnerHeaders = () => ({
+	"x-runner-key": env.INTERNAL_RUNNER_KEY ?? "",
+	"x-runner-id": TEST_RUNNER_ID,
+});
+
+export const bindRunnerAgent = async (agentId: string) => {
+	const res = await SELF.fetch(
+		"https://example.com/v1/internal/runners/agents/bind",
+		{
+			method: "POST",
+			headers: {
+				...runnerHeaders(),
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({ agentId }),
+		},
+	);
+	if (!res.ok) {
+		const body = await res.text();
+		throw new Error(`Failed to bind runner agent (${res.status}): ${body}`);
+	}
+};
 
 export const readSseUntil = async (
 	res: Response,

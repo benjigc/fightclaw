@@ -15,6 +15,7 @@ import { requestContext } from "./middleware/requestContext";
 import { requestLogger } from "./obs/requestLogger";
 import { sentryOptions } from "./obs/sentry";
 import { authRoutes } from "./routes/auth";
+import { internalRunnerRoutes } from "./routes/internalRunner";
 import { matchesRoutes } from "./routes/matches";
 import { internalPromptsRoutes, promptsRoutes } from "./routes/prompts";
 import { queueRoutes } from "./routes/queue";
@@ -287,6 +288,7 @@ app.get("/v1/matches/:id/ws", async (c) => {
 // Workstream A routes.
 app.route("/v1/auth", authRoutes);
 app.route("/v1/agents", promptsRoutes);
+app.route("/v1/internal", internalRunnerRoutes);
 // Internal runner prompt injection (Workstream A).
 app.route("/v1/internal", internalPromptsRoutes);
 app.route("/", queueRoutes);

@@ -16,6 +16,7 @@ import { ELO_START } from "../constants/rating";
 import { log } from "../obs/log";
 import { emitMetric } from "../obs/metrics";
 import {
+	buildAgentThoughtEvent,
 	buildEngineEventsEvent,
 	buildGameEndedAliasEvent,
 	buildMatchEndedEvent,
@@ -68,6 +69,7 @@ type MovePayload = {
 	moveId: string;
 	expectedVersion: number;
 	move: unknown;
+	publicThought?: string;
 };
 
 type MoveResponse =
@@ -108,6 +110,20 @@ const DEFAULT_TURN_TIMEOUT_SECONDS = 60;
 const WS_DISCONNECT_GRACE_MS = 15_000;
 const ELO_K = 32;
 const DISCONNECT_DEADLINE_PREFIX = "disconnect:";
+const MAX_PUBLIC_THOUGHT_LEN = 280;
+
+const stripControlCharsExceptNewline = (input: string) => {
+	let output = "";
+	for (const char of input) {
+		const code = char.charCodeAt(0);
+		if ((code >= 0 && code <= 31 && code !== 10) || code === 127) {
+			output += " ";
+			continue;
+		}
+		output += char;
+	}
+	return output;
+};
 
 const initPayloadSchema = z
 	.object({
@@ -177,6 +193,20 @@ const extractRunnerTelemetry = (headers: Headers): RunnerTelemetry | null => {
 		tokensIn,
 		tokensOut,
 	};
+};
+
+const sanitizePublicThought = (value: unknown) => {
+	if (typeof value !== "string") return null;
+	const normalized = value.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+	// Keep newline normalization deterministic while removing other control chars.
+	// Newlines are flattened below for one-line spectator thought rendering.
+	const trimmed = stripControlCharsExceptNewline(normalized)
+		.replaceAll("\n", " ")
+		.trim();
+	if (!trimmed) return null;
+	return trimmed.length > MAX_PUBLIC_THOUGHT_LEN
+		? trimmed.slice(0, MAX_PUBLIC_THOUGHT_LEN)
+		: trimmed;
 };
 
 export class MatchDO extends DurableObject<MatchEnv> {
@@ -915,6 +945,34 @@ export class MatchDO extends DurableObject<MatchEnv> {
 							ts: nextState.updatedAt,
 						}),
 					);
+					const safeThought = sanitizePublicThought(body.publicThought);
+					const player =
+						getPlayerSideForAgent(nextState.game, agentId) ??
+						getPlayerSideForAgent(state.game, agentId);
+					if (safeThought && player) {
+						const thoughtPayload = buildAgentThoughtEvent(matchId, {
+							player,
+							agentId,
+							moveId: body.moveId,
+							stateVersion: nextState.stateVersion,
+							text: safeThought,
+							ts: nextState.updatedAt,
+						});
+						await this.recordEvent(nextState, "agent_thought", {
+							payloadVersion: 1,
+							player,
+							agentId,
+							moveId: body.moveId,
+							stateVersion: nextState.stateVersion,
+							text: safeThought,
+							ts: nextState.updatedAt,
+						});
+						await this.broadcast(
+							[...this.spectators],
+							"agent_thought",
+							thoughtPayload,
+						);
+					}
 				}
 			}
 			this.broadcastYourTurn(nextState);
@@ -1539,6 +1597,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 				headers: {
 					"content-type": "application/json",
 					"x-runner-key": key,
+					"x-runner-id": "match-do",
 				},
 				body: JSON.stringify({ matchId }),
 			});
@@ -1639,6 +1698,13 @@ const getActiveAgentId = (game: GameState) => {
 	const side = game.activePlayer;
 	const player = game.players[side];
 	return player?.id ?? null;
+};
+
+const getPlayerSideForAgent = (game: GameState, agentId: string) => {
+	for (const side of ["A", "B"] as const) {
+		if (game.players[side]?.id === agentId) return side;
+	}
+	return null;
 };
 
 const isMovePayload = (value: unknown): value is MovePayload => {

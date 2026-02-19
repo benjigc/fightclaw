@@ -2,7 +2,7 @@ export type { AuthIdentity } from "./contracts/auth";
 
 import type { AuthIdentity } from "./contracts/auth";
 
-export type ContextKeys = "auth" | "agentId" | "requestId";
+export type ContextKeys = "auth" | "agentId" | "runnerId" | "requestId";
 
 export const createIdentity = (input: {
 	agentId: string;
