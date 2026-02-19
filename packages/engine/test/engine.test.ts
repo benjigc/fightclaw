@@ -41,9 +41,16 @@ function cloneWithConfig(state: MatchState): MatchState {
 	return bindEngineConfig(structuredClone(state), getEngineConfig(state));
 }
 
-function hexIndex(id: HexId): number {
+function hexIndex(
+	id: HexId,
+	boardContext: number | MatchState = LEGACY_TEST_CONFIG.boardColumns,
+): number {
 	const { row, col } = parseHexId(id);
-	return row * 21 + col;
+	const columns =
+		typeof boardContext === "number"
+			? boardContext
+			: getEngineConfig(boardContext).boardColumns;
+	return row * columns + col;
 }
 
 /** Remove all units from a state */
@@ -84,7 +91,7 @@ function addUnitToState(
 		...opts,
 	};
 	s.players[owner].units.push(unit);
-	const idx = hexIndex(position);
+	const idx = hexIndex(position, s);
 	const boardHex = s.board[idx];
 	if (boardHex) {
 		s.board[idx] = {
@@ -176,7 +183,7 @@ describe("v2 engine - War of Attrition", () => {
 		expect(c8?.reserve).toBe(15);
 	});
 
-	test("activePlayer is A and actionsRemaining is 5", () => {
+	test("activePlayer is A and actionsRemaining is 5 (legacy config)", () => {
 		const state = createLegacyState(0);
 		expect(state.activePlayer).toBe("A");
 		expect(state.actionsRemaining).toBe(5);
@@ -334,7 +341,8 @@ describe("v2 engine - War of Attrition", () => {
 		let state = createLegacyState(0);
 		// A-1 is infantry at B2. Movement is now 2.
 		// Find an empty neighbor to move to
-		const nbrs = neighborsOf("B2");
+		const boardColumns = getEngineConfig(state).boardColumns;
+		const nbrs = neighborsOf("B2", boardColumns);
 		let moveTo: HexId | null = null;
 		for (const n of nbrs) {
 			const hex = state.board[hexIndex(n)];
@@ -356,7 +364,7 @@ describe("v2 engine - War of Attrition", () => {
 		state = r1.state;
 
 		// Try to move same unit again
-		const nbrs2 = neighborsOf(moveTo);
+		const nbrs2 = neighborsOf(moveTo, boardColumns);
 		let moveTo2: HexId | null = null;
 		for (const n of nbrs2) {
 			const hex = state.board[hexIndex(n)];
@@ -554,7 +562,8 @@ describe("v2 engine - War of Attrition", () => {
 		state = structuredClone(state);
 		state.players.A.wood = 3;
 
-		const nbrs = neighborsOf("B2");
+		const boardColumns = getEngineConfig(state).boardColumns;
+		const nbrs = neighborsOf("B2", boardColumns);
 		let moveTo: HexId | null = null;
 		for (const n of nbrs) {
 			const hex = state.board[hexIndex(n)];
@@ -857,7 +866,8 @@ describe("v2 engine - War of Attrition", () => {
 		let state = createLegacyState(0);
 		state = clearUnits(state);
 		state = addUnitToState(state, "B-1", "infantry", "B", "D10");
-		const d10Neighbors = neighborsOf("D10");
+		const boardColumns = getEngineConfig(state).boardColumns;
+		const d10Neighbors = neighborsOf("D10", boardColumns);
 		// biome-ignore lint/style/noNonNullAssertion: hex always has neighbors
 		const friendlyPos1 = d10Neighbors[0]!;
 		// biome-ignore lint/style/noNonNullAssertion: hex always has neighbors
@@ -902,7 +912,8 @@ describe("v2 engine - War of Attrition", () => {
 		let state = createLegacyState(0);
 		state = clearUnits(state);
 		state = addUnitToState(state, "B-1", "infantry", "B", "D10");
-		const d10Neighbors = neighborsOf("D10");
+		const boardColumns = getEngineConfig(state).boardColumns;
+		const d10Neighbors = neighborsOf("D10", boardColumns);
 		// biome-ignore lint/style/noNonNullAssertion: hex always has neighbors
 		state = addUnitToState(state, "B-2", "infantry", "B", d10Neighbors[0]!);
 		// biome-ignore lint/style/noNonNullAssertion: hex always has neighbors

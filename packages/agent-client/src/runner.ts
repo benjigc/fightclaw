@@ -104,133 +104,144 @@ export const runMatch = async (
 
 	const stopFns: Array<() => void> = [];
 
-	const terminal = await new Promise<RunMatchResult>((resolve, reject) => {
-		let fallbackStarted = false;
-		const startHttpFallback = () => {
-			fallbackStarted = true;
-			const fallbackSource = createHttpSource();
-			void startSource(fallbackSource);
-			source = fallbackSource;
-			transport = source.kind;
-		};
+	let terminal: RunMatchResult;
+	try {
+		terminal = await new Promise<RunMatchResult>((resolve, reject) => {
+			let fallbackStarted = false;
+			const startHttpFallback = () => {
+				fallbackStarted = true;
+				const fallbackSource = createHttpSource();
+				void startSource(fallbackSource);
+				source = fallbackSource;
+				transport = source.kind;
+			};
 
-		const startSource = (candidate: MatchEventSource) => {
-			return candidate
-				.start(async (event) => {
-					if (
-						candidate.kind === "ws" &&
-						fallbackStarted &&
-						event.type === "error"
-					) {
+			const startSource = (candidate: MatchEventSource) => {
+				return candidate
+					.start(async (event) => {
+						if (
+							candidate.kind === "ws" &&
+							fallbackStarted &&
+							event.type === "error"
+						) {
+							return;
+						}
+						transport = candidate.kind;
+						await handleEvent(event, candidate.kind);
+					})
+					.then((stop) => {
+						stopFns.push(stop);
+					})
+					.catch((error) => {
+						if (candidate.kind === "ws" && fallbackStarted) return;
+						if (
+							candidate.kind === "ws" &&
+							allowTransportFallback &&
+							!fallbackStarted
+						) {
+							startHttpFallback();
+							return;
+						}
+						reject(error);
+					});
+			};
+
+			const handleEvent = async (
+				event: RunnerEvent,
+				sourceKind: MatchEventSource["kind"],
+			) => {
+				if (event.type === "state") {
+					lastObservedVersion = event.stateVersion;
+					return;
+				}
+				if (event.type === "match_ended") {
+					resolve({
+						matchId,
+						transport,
+						reason: event.reason ?? "ended",
+						winnerAgentId: event.winnerAgentId ?? null,
+						loserAgentId:
+							event.loserAgentId ??
+							normalizeLoser(
+								me.agentId,
+								opponentId,
+								event.winnerAgentId ?? null,
+							),
+					});
+					return;
+				}
+				if (event.type === "error") {
+					if (sourceKind === "ws" && fallbackStarted) {
 						return;
 					}
-					transport = candidate.kind;
-					await handleEvent(event, candidate.kind);
-				})
-				.then((stop) => {
-					stopFns.push(stop);
-				})
-				.catch((error) => {
-					if (candidate.kind === "ws" && fallbackStarted) return;
+					if (transport === "ws" && fallbackStarted) {
+						return;
+					}
 					if (
-						candidate.kind === "ws" &&
+						sourceKind === "ws" &&
 						allowTransportFallback &&
 						!fallbackStarted
 					) {
 						startHttpFallback();
 						return;
 					}
-					reject(error);
-				});
-		};
-
-		const handleEvent = async (
-			event: RunnerEvent,
-			sourceKind: MatchEventSource["kind"],
-		) => {
-			if (event.type === "state") {
-				lastObservedVersion = event.stateVersion;
-				return;
-			}
-			if (event.type === "match_ended") {
-				resolve({
-					matchId,
-					transport,
-					reason: event.reason ?? "ended",
-					winnerAgentId: event.winnerAgentId ?? null,
-					loserAgentId:
-						event.loserAgentId ??
-						normalizeLoser(me.agentId, opponentId, event.winnerAgentId ?? null),
-				});
-				return;
-			}
-			if (event.type === "error") {
-				if (sourceKind === "ws" && fallbackStarted) {
+					reject(new Error(`Match event source error: ${event.error}`));
 					return;
 				}
-				if (transport === "ws" && fallbackStarted) {
+				if (event.type !== "your_turn") return;
+
+				const expectedVersion =
+					event.stateVersion >= 0 ? event.stateVersion : lastObservedVersion;
+				if (expectedVersion < 0) {
 					return;
 				}
-				if (sourceKind === "ws" && allowTransportFallback && !fallbackStarted) {
-					startHttpFallback();
+				if (handledTurns.has(expectedVersion)) {
 					return;
 				}
-				reject(new Error(`Match event source error: ${event.error}`));
-				return;
-			}
-			if (event.type !== "your_turn") return;
-
-			const expectedVersion =
-				event.stateVersion >= 0 ? event.stateVersion : lastObservedVersion;
-			if (expectedVersion < 0) {
-				return;
-			}
-			if (handledTurns.has(expectedVersion)) {
-				return;
-			}
-			if (inFlightTurns.has(expectedVersion)) {
-				return;
-			}
-			inFlightTurns.add(expectedVersion);
-
-			try {
-				const move = await options.moveProvider.nextMove({
-					agentId: me.agentId,
-					matchId,
-					stateVersion: expectedVersion,
-				});
-				const response = await client.submitMove(matchId, {
-					moveId: randomUUID(),
-					expectedVersion,
-					move,
-				});
-				if (response.ok) {
-					lastObservedVersion = response.state.stateVersion;
-					handledTurns.add(expectedVersion);
+				if (inFlightTurns.has(expectedVersion)) {
+					return;
 				}
-				const terminalFromMove = resolveTerminalFromMove(
-					response,
-					me.agentId,
-					opponentId,
-				);
-				if (terminalFromMove) {
-					resolve({
-						...terminalFromMove,
+				inFlightTurns.add(expectedVersion);
+
+				try {
+					const move = await options.moveProvider.nextMove({
+						agentId: me.agentId,
 						matchId,
-						transport,
+						stateVersion: expectedVersion,
 					});
+					const response = await client.submitMove(matchId, {
+						moveId: randomUUID(),
+						expectedVersion,
+						move,
+					});
+					if (response.ok) {
+						lastObservedVersion = response.state.stateVersion;
+						handledTurns.add(expectedVersion);
+					}
+					const terminalFromMove = resolveTerminalFromMove(
+						response,
+						me.agentId,
+						opponentId,
+					);
+					if (terminalFromMove) {
+						resolve({
+							...terminalFromMove,
+							matchId,
+							transport,
+						});
+					}
+				} catch (error) {
+					reject(error);
+				} finally {
+					inFlightTurns.delete(expectedVersion);
 				}
-			} catch (error) {
-				reject(error);
-			} finally {
-				inFlightTurns.delete(expectedVersion);
-			}
-		};
-		void startSource(source);
-	});
-
-	for (const stop of stopFns) {
-		stop();
+			};
+			void startSource(source);
+		});
+	} finally {
+		for (const stop of stopFns) {
+			stop();
+		}
 	}
 	return terminal;
 };
