@@ -206,8 +206,8 @@ export type ApplyMoveResult =
 // ---------------------------------------------------------------------------
 
 const ROWS = 9;
-const ACTIONS_PER_TURN = 5;
-const TURN_LIMIT = 20;
+const ACTIONS_PER_TURN = 7;
+const TURN_LIMIT = 40;
 const FORTIFY_WOOD_COST = 2;
 const PLAYER_SIDES: PlayerSide[] = ["A", "B"];
 
@@ -270,7 +270,7 @@ function isValidHexId(s: string, boardColumns: 17 | 21): boolean {
 	return true;
 }
 
-export function neighborsOf(id: HexId, boardColumns: 17 | 21 = 21): HexId[] {
+export function neighborsOf(id: HexId, boardColumns: 17 | 21 = 17): HexId[] {
 	const { row, col } = parseHexId(id);
 	return neighbors(row, col, boardColumns);
 }
@@ -314,7 +314,7 @@ function bfsDistance(
 	start: HexId,
 	target: HexId,
 	blocked?: Set<HexId>,
-	boardColumns: 17 | 21 = 21,
+	boardColumns: 17 | 21 = 17,
 ): number | null {
 	if (
 		!isValidHexId(start, boardColumns) ||
@@ -660,7 +660,7 @@ export type EngineConfigInput = DeepPartial<EngineConfig>;
 export const DEFAULT_CONFIG: EngineConfig = {
 	actionsPerTurn: ACTIONS_PER_TURN,
 	turnLimit: TURN_LIMIT,
-	boardColumns: 21,
+	boardColumns: 17,
 	startingGold: 15,
 	startingWood: 5,
 	unitStats: {

@@ -99,9 +99,10 @@ export const runMatch = async (
 	let source = preferredSource;
 	let lastObservedVersion = -1;
 	const handledTurns = new Set<number>();
+	const inFlightTurns = new Set<number>();
 	let transport = source.kind;
 
-	let stopSource: unknown = null;
+	const stopFns: Array<() => void> = [];
 
 	const terminal = await new Promise<RunMatchResult>((resolve, reject) => {
 		let fallbackStarted = false;
@@ -116,13 +117,21 @@ export const runMatch = async (
 		const startSource = (candidate: MatchEventSource) => {
 			return candidate
 				.start(async (event) => {
+					if (
+						candidate.kind === "ws" &&
+						fallbackStarted &&
+						event.type === "error"
+					) {
+						return;
+					}
 					transport = candidate.kind;
-					await handleEvent(event);
+					await handleEvent(event, candidate.kind);
 				})
 				.then((stop) => {
-					stopSource = stop;
+					stopFns.push(stop);
 				})
 				.catch((error) => {
+					if (candidate.kind === "ws" && fallbackStarted) return;
 					if (
 						candidate.kind === "ws" &&
 						allowTransportFallback &&
@@ -135,7 +144,10 @@ export const runMatch = async (
 				});
 		};
 
-		const handleEvent = async (event: RunnerEvent) => {
+		const handleEvent = async (
+			event: RunnerEvent,
+			sourceKind: MatchEventSource["kind"],
+		) => {
 			if (event.type === "state") {
 				lastObservedVersion = event.stateVersion;
 				return;
@@ -153,7 +165,13 @@ export const runMatch = async (
 				return;
 			}
 			if (event.type === "error") {
-				if (transport === "ws" && allowTransportFallback && !fallbackStarted) {
+				if (sourceKind === "ws" && fallbackStarted) {
+					return;
+				}
+				if (transport === "ws" && fallbackStarted) {
+					return;
+				}
+				if (sourceKind === "ws" && allowTransportFallback && !fallbackStarted) {
 					startHttpFallback();
 					return;
 				}
@@ -170,7 +188,10 @@ export const runMatch = async (
 			if (handledTurns.has(expectedVersion)) {
 				return;
 			}
-			handledTurns.add(expectedVersion);
+			if (inFlightTurns.has(expectedVersion)) {
+				return;
+			}
+			inFlightTurns.add(expectedVersion);
 
 			try {
 				const move = await options.moveProvider.nextMove({
@@ -185,6 +206,7 @@ export const runMatch = async (
 				});
 				if (response.ok) {
 					lastObservedVersion = response.state.stateVersion;
+					handledTurns.add(expectedVersion);
 				}
 				const terminalFromMove = resolveTerminalFromMove(
 					response,
@@ -200,13 +222,15 @@ export const runMatch = async (
 				}
 			} catch (error) {
 				reject(error);
+			} finally {
+				inFlightTurns.delete(expectedVersion);
 			}
 		};
 		void startSource(source);
 	});
 
-	if (typeof stopSource === "function") {
-		(stopSource as () => void)();
+	for (const stop of stopFns) {
+		stop();
 	}
 	return terminal;
 };

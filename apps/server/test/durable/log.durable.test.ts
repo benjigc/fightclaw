@@ -62,7 +62,7 @@ it("exposes match_events log for active featured match with engineEvents payload
 		| undefined;
 	expect(typeof startedPayload?.seed).toBe("number");
 	expect(Array.isArray(startedPayload?.players)).toBe(true);
-	expect(startedPayload?.engineConfig?.boardColumns).toBe(21);
+	expect(startedPayload?.engineConfig?.boardColumns).toBe(17);
 
 	expect(moveApplied).toBeTruthy();
 	const payload = moveApplied?.payload as
