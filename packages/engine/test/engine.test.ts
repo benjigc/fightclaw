@@ -43,7 +43,7 @@ function cloneWithConfig(state: MatchState): MatchState {
 
 function hexIndex(
 	id: HexId,
-	boardContext: number | MatchState = LEGACY_TEST_CONFIG.boardColumns,
+	boardContext: number | MatchState = LEGACY_TEST_CONFIG.boardColumns ?? 21,
 ): number {
 	const { row, col } = parseHexId(id);
 	const columns =
