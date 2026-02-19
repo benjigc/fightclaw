@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { AppBindings } from "../appTypes";
 import { ELO_START } from "../constants/rating";
+import { RUNNER_ID_RE } from "../constants/runner";
 import { emitMetric } from "../obs/metrics";
 import {
 	buildMatchFoundEvent,
@@ -28,7 +29,6 @@ const RECENT_PREFIX = "recent:";
 const QUEUE_TTL_MS = 10 * 60 * 1000;
 const FEATURED_STREAM_INTERVAL_MS = 1000;
 const WS_QUEUE_LEAVE_GRACE_MS = 15_000;
-const RUNNER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$/;
 
 type MatchmakerEnv = {
 	DB: D1Database;
