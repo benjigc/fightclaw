@@ -133,7 +133,7 @@ it(
 				engineEvents.some((event) => {
 					if (!event || typeof event !== "object") return false;
 					const record = event as { type?: unknown; at?: unknown };
-					return record.type === "fortify" && typeof record.at === "object";
+					return record.type === "fortify" && typeof record.at === "string";
 				}),
 			).toBe(true);
 		} finally {

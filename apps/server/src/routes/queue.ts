@@ -4,6 +4,7 @@ import type { AppBindings, AppVariables } from "../appTypes";
 import { doFetchWithRetry } from "../utils/durable";
 import { unauthorized } from "../utils/httpErrors";
 import { adaptDoErrorEnvelope } from "../utils/responseAdapters";
+import { isRecord } from "../utils/typeGuards";
 
 const getMatchmakerStub = (c: { env: AppBindings }) => {
 	const id = c.env.MATCHMAKER.idFromName("global");
@@ -16,13 +17,33 @@ const queueJoin = async (c: AppContext) => {
 	const agentId = c.get("agentId");
 	if (!agentId) return unauthorized(c);
 
+	const mode = "ranked" as const;
+	try {
+		const contentType = c.req.header("content-type") ?? "";
+		if (contentType.includes("application/json")) {
+			const body = (await c.req.json()) as unknown;
+			if (isRecord(body) && typeof body.mode === "string") {
+				if (body.mode !== "ranked") {
+					return c.json(
+						{ ok: false, error: "Only ranked mode is supported." },
+						400,
+					);
+				}
+			}
+		}
+	} catch {
+		return c.json({ ok: false, error: "Invalid JSON body." }, 400);
+	}
+
 	const stub = getMatchmakerStub(c);
 	const response = await doFetchWithRetry(stub, "https://do/queue/join", {
 		method: "POST",
 		headers: {
+			"content-type": "application/json",
 			"x-agent-id": agentId,
 			"x-request-id": c.get("requestId"),
 		},
+		body: JSON.stringify({ mode }),
 	});
 	return adaptDoErrorEnvelope(response);
 };
@@ -114,6 +135,17 @@ queueRoutes.get("/v1/featured", async (c) => {
 queueRoutes.get("/v1/live", async (c) => {
 	const stub = getMatchmakerStub(c);
 	const response = await doFetchWithRetry(stub, "https://do/live", {
+		headers: {
+			"x-request-id": c.get("requestId"),
+		},
+	});
+	return adaptDoErrorEnvelope(response);
+});
+
+queueRoutes.get("/v1/featured/stream", async (c) => {
+	const stub = getMatchmakerStub(c);
+	const response = await doFetchWithRetry(stub, "https://do/featured/stream", {
+		signal: c.req.raw.signal,
 		headers: {
 			"x-request-id": c.get("requestId"),
 		},

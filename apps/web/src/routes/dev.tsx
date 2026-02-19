@@ -1,6 +1,8 @@
 import {
 	applyMove,
+	bindEngineConfig,
 	createInitialState,
+	type EngineConfigInput,
 	listLegalMoves,
 	type MatchState,
 	type Move,
@@ -34,6 +36,7 @@ type ReplayMatch = {
 	label: string;
 	scenario: string | null;
 	seed: number;
+	engineConfig?: EngineConfigInput | null;
 	participants: [string, string];
 	result: { winner: string | null; reason: string };
 	initialState: MatchState;
@@ -187,6 +190,13 @@ function DevLayout() {
 
 	const selectedMatch = bundle?.matches[selectedMatchIdx] ?? null;
 
+	const bindReplayState = useCallback((match: ReplayMatch): MatchState => {
+		return bindEngineConfig(
+			match.initialState,
+			match.engineConfig ?? undefined,
+		);
+	}, []);
+
 	const loadBundle = useCallback(
 		async (url: string) => {
 			setReplayError(null);
@@ -205,14 +215,15 @@ function DevLayout() {
 				resetAnimator();
 				const first = data.matches[0];
 				if (first) {
-					replayStateRef.current = first.initialState;
-					setBoardState(first.initialState);
+					const initial = bindReplayState(first);
+					replayStateRef.current = initial;
+					setBoardState(initial);
 				}
 			} catch (err) {
 				setReplayError((err as Error).message);
 			}
 		},
-		[resetAnimator],
+		[resetAnimator, bindReplayState],
 	);
 
 	const selectMatch = useCallback(
@@ -225,10 +236,11 @@ function DevLayout() {
 			setReplayPlaying(false);
 			setActionLog([]);
 			resetAnimator();
-			replayStateRef.current = match.initialState;
-			setBoardState(match.initialState);
+			const initial = bindReplayState(match);
+			replayStateRef.current = initial;
+			setBoardState(initial);
 		},
-		[bundle, resetAnimator],
+		[bundle, bindReplayState, resetAnimator],
 	);
 
 	const resetMatch = useCallback(() => {
@@ -237,9 +249,10 @@ function DevLayout() {
 		setReplayPlaying(false);
 		setActionLog([]);
 		resetAnimator();
-		replayStateRef.current = selectedMatch.initialState;
-		setBoardState(selectedMatch.initialState);
-	}, [selectedMatch, resetAnimator]);
+		const initial = bindReplayState(selectedMatch);
+		replayStateRef.current = initial;
+		setBoardState(initial);
+	}, [selectedMatch, bindReplayState, resetAnimator]);
 
 	const stepReplay = useCallback(() => {
 		if (!selectedMatch) return;
@@ -247,7 +260,8 @@ function DevLayout() {
 
 		const step = selectedMatch.steps[replayPly];
 		if (!step) return;
-		const replayState = replayStateRef.current ?? selectedMatch.initialState;
+		const replayState =
+			replayStateRef.current ?? bindReplayState(selectedMatch);
 		const result = applyMove(replayState, step.move);
 		if (!result.ok) {
 			setActionLog((prev) =>
@@ -275,15 +289,15 @@ function DevLayout() {
 			[`[${replayPly}] ${step.playerID}: ${moveText}`, ...prev].slice(0, 200),
 		);
 		setReplayPly((p) => p + 1);
-	}, [selectedMatch, replayPly, enqueue]);
+	}, [selectedMatch, replayPly, bindReplayState, enqueue]);
 
 	useEffect(() => {
 		if (mode !== "replay" || !selectedMatch) {
 			replayStateRef.current = null;
 			return;
 		}
-		replayStateRef.current = selectedMatch.initialState;
-	}, [mode, selectedMatch]);
+		replayStateRef.current = bindReplayState(selectedMatch);
+	}, [mode, selectedMatch, bindReplayState]);
 
 	// Auto-play interval
 	useEffect(() => {
@@ -322,13 +336,14 @@ function DevLayout() {
 				setBoardState(createPreviewState(seed));
 				setMoveCount(0);
 			} else if (m === "replay" && selectedMatch) {
-				replayStateRef.current = selectedMatch.initialState;
-				setBoardState(selectedMatch.initialState);
+				const initial = bindReplayState(selectedMatch);
+				replayStateRef.current = initial;
+				setBoardState(initial);
 				setReplayPly(0);
 				setActionLog([]);
 			}
 		},
-		[createPreviewState, resetAnimator, seed, selectedMatch],
+		[createPreviewState, bindReplayState, resetAnimator, seed, selectedMatch],
 	);
 
 	// ── Derived ─────────────────────────────────────────────────────────

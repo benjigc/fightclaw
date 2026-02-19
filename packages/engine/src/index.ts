@@ -217,8 +217,19 @@ const BOARD_17_CANONICAL_COL_MAP = [
 	0, 1, 2, 3, 4, 5, 6, 7, 10, 13, 14, 15, 16, 17, 18, 19, 20,
 ] as const;
 
-function currentCols(): number {
-	return resolveConfig().boardColumns;
+function inferBoardColumnsFromBoard(board: HexState[]): 17 | 21 {
+	if (board.length % ROWS !== 0) {
+		throw new Error(
+			`Invalid board length=${board.length}; expected multiple of ROWS=${ROWS}`,
+		);
+	}
+	const inferred = board.length / ROWS;
+	if (inferred !== 17 && inferred !== 21) {
+		throw new Error(
+			`Invalid inferred board columns=${inferred} from board length=${board.length}`,
+		);
+	}
+	return inferred;
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +237,10 @@ function currentCols(): number {
 // ---------------------------------------------------------------------------
 
 export function parseHexId(id: HexId): { row: number; col: number } {
-	const rowChar = id[0]!;
+	const rowChar = id[0];
+	if (!rowChar) {
+		throw new Error(`Invalid hex id: ${id}`);
+	}
 	const colStr = id.slice(1);
 	return {
 		row: rowChar.charCodeAt(0) - 65,
@@ -238,29 +252,30 @@ export function toHexId(row: number, col: number): HexId {
 	return `${ROW_LETTERS[row]}${col + 1}`;
 }
 
-function hexIdIndex(id: HexId): number {
+function hexIdIndex(id: HexId, boardColumns: 17 | 21): number {
 	const { row, col } = parseHexId(id);
-	return row * currentCols() + col;
+	return row * boardColumns + col;
 }
 
-function isValidHexId(s: string): boolean {
+function isValidHexId(s: string, boardColumns: 17 | 21): boolean {
 	if (s.length < 2 || s.length > 3) return false;
-	const rowChar = s[0]!;
+	const rowChar = s[0];
+	if (!rowChar) return false;
 	const rowIdx = rowChar.charCodeAt(0) - 65;
 	if (rowIdx < 0 || rowIdx >= ROWS) return false;
 	const colNum = Number(s.slice(1));
-	if (!Number.isInteger(colNum) || colNum < 1 || colNum > currentCols()) {
+	if (!Number.isInteger(colNum) || colNum < 1 || colNum > boardColumns) {
 		return false;
 	}
 	return true;
 }
 
-export function neighborsOf(id: HexId): HexId[] {
+export function neighborsOf(id: HexId, boardColumns: 17 | 21 = 21): HexId[] {
 	const { row, col } = parseHexId(id);
-	return neighbors(row, col);
+	return neighbors(row, col, boardColumns);
 }
 
-function neighbors(row: number, col: number): HexId[] {
+function neighbors(row: number, col: number, boardColumns: 17 | 21): HexId[] {
 	// odd-r offset, pointy-top
 	const deltas: ReadonlyArray<readonly [number, number]> =
 		row % 2 === 0
@@ -284,32 +299,39 @@ function neighbors(row: number, col: number): HexId[] {
 	for (const [dc, dr] of deltas) {
 		const nr = row + dr;
 		const nc = col + dc;
-		if (nr >= 0 && nr < ROWS && nc >= 0 && nc < currentCols()) {
+		if (nr >= 0 && nr < ROWS && nc >= 0 && nc < boardColumns) {
 			result.push(toHexId(nr, nc));
 		}
 	}
 	return result;
 }
 
-function hexDistance(a: HexId, b: HexId): number | null {
-	return bfsDistance(a, b, undefined);
+function hexDistance(a: HexId, b: HexId, boardColumns: 17 | 21): number | null {
+	return bfsDistance(a, b, undefined, boardColumns);
 }
 
 function bfsDistance(
 	start: HexId,
 	target: HexId,
 	blocked?: Set<HexId>,
+	boardColumns: 17 | 21 = 21,
 ): number | null {
-	if (!isValidHexId(start) || !isValidHexId(target)) return null;
+	if (
+		!isValidHexId(start, boardColumns) ||
+		!isValidHexId(target, boardColumns)
+	) {
+		return null;
+	}
 	if (start === target) return 0;
 
 	const queue: Array<{ id: HexId; dist: number }> = [{ id: start, dist: 0 }];
 	const seen = new Set<HexId>([start]);
 	while (queue.length > 0) {
-		const current = queue.shift()!;
-		for (const n of neighborsOf(current.id)) {
+		const current = queue.shift();
+		if (!current) continue;
+		for (const n of neighborsOf(current.id, boardColumns)) {
 			if (seen.has(n)) continue;
-			if (blocked && blocked.has(n)) continue;
+			if (blocked?.has(n)) continue;
 			if (n === target) return current.dist + 1;
 			seen.add(n);
 			queue.push({ id: n, dist: current.dist + 1 });
@@ -322,21 +344,24 @@ function pathDistance(
 	start: HexId,
 	target: HexId,
 	blocked: Set<HexId>,
+	boardColumns: 17 | 21,
 ): number | null {
-	return bfsDistance(start, target, blocked);
+	return bfsDistance(start, target, blocked, boardColumns);
 }
 
 function reachableHexes(
 	start: HexId,
 	range: number,
 	blocked: Set<HexId>,
+	boardColumns: 17 | 21,
 ): HexId[] {
 	const results: HexId[] = [];
 	const queue: Array<{ id: HexId; dist: number }> = [{ id: start, dist: 0 }];
 	const seen = new Set<HexId>([start]);
 	while (queue.length > 0) {
-		const current = queue.shift()!;
-		for (const n of neighborsOf(current.id)) {
+		const current = queue.shift();
+		if (!current) continue;
+		for (const n of neighborsOf(current.id, boardColumns)) {
 			if (seen.has(n)) continue;
 			if (blocked.has(n)) continue;
 			const nextDist = current.dist + 1;
@@ -357,6 +382,7 @@ function hasForestFreePath(
 	pathLen: number,
 	blocked: Set<HexId>,
 	board: HexState[],
+	boardColumns: 17 | 21,
 ): boolean {
 	if (pathLen <= 1) return true; // adjacent, no intermediate hexes
 
@@ -368,10 +394,11 @@ function hasForestFreePath(
 	bestDist.set(start, 0);
 
 	while (queue.length > 0) {
-		const current = queue.shift()!;
+		const current = queue.shift();
+		if (!current) continue;
 		if (current.dist >= pathLen) continue;
 
-		for (const n of neighborsOf(current.id)) {
+		for (const n of neighborsOf(current.id, boardColumns)) {
 			if (blocked.has(n) && n !== target) continue;
 			const nextDist = current.dist + 1;
 			if (nextDist > pathLen) continue;
@@ -384,7 +411,7 @@ function hasForestFreePath(
 			const prev = bestDist.get(n);
 			if (prev !== undefined && prev < nextDist) continue;
 
-			const hex = board[hexIdIndex(n)];
+			const hex = board[hexIdIndex(n, boardColumns)];
 			const isForest = hex?.type === "forest";
 			const ff = current.forestFree && !isForest;
 
@@ -624,7 +651,11 @@ export type EngineConfig = {
 	};
 };
 
-export type EngineConfigInput = Partial<EngineConfig>;
+type DeepPartial<T> = {
+	[K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
+};
+
+export type EngineConfigInput = DeepPartial<EngineConfig>;
 
 export const DEFAULT_CONFIG: EngineConfig = {
 	actionsPerTurn: ACTIONS_PER_TURN,
@@ -767,8 +798,18 @@ function mergeConfig(input?: EngineConfigInput): EngineConfig {
 			},
 		},
 		upgradeCosts: {
-			...DEFAULT_CONFIG.upgradeCosts,
-			...input.upgradeCosts,
+			infantry: {
+				...DEFAULT_CONFIG.upgradeCosts.infantry,
+				...input.upgradeCosts?.infantry,
+			},
+			cavalry: {
+				...DEFAULT_CONFIG.upgradeCosts.cavalry,
+				...input.upgradeCosts?.cavalry,
+			},
+			archer: {
+				...DEFAULT_CONFIG.upgradeCosts.archer,
+				...input.upgradeCosts?.archer,
+			},
 		},
 		terrainDefenseBonus: {
 			...DEFAULT_CONFIG.terrainDefenseBonus,
@@ -787,11 +828,39 @@ function mergeConfig(input?: EngineConfigInput): EngineConfig {
 }
 
 // We store config outside of MatchState to avoid exposing it on the wire.
-// Tests can override via createInitialState's configInput param.
-let _activeConfig: EngineConfig = DEFAULT_CONFIG;
+const CONFIG_BY_STATE = new WeakMap<MatchState, EngineConfig>();
 
-function resolveConfig(): EngineConfig {
-	return _activeConfig;
+function bindConfig(state: MatchState, config: EngineConfig): MatchState {
+	CONFIG_BY_STATE.set(state, config);
+	return state;
+}
+
+function resolveConfig(state: MatchState): EngineConfig {
+	const bound = CONFIG_BY_STATE.get(state);
+	if (bound) return bound;
+	const inferred = mergeConfig({
+		boardColumns: inferBoardColumnsFromBoard(state.board),
+	});
+	CONFIG_BY_STATE.set(state, inferred);
+	return inferred;
+}
+
+export function bindEngineConfig(
+	state: MatchState,
+	configInput?: EngineConfigInput,
+): MatchState {
+	const existing = resolveConfig(state);
+	const boardColumns = inferBoardColumnsFromBoard(state.board);
+	const config = mergeConfig({
+		...existing,
+		...configInput,
+		boardColumns,
+	});
+	return bindConfig(state, config);
+}
+
+export function getEngineConfig(state: MatchState): EngineConfig {
+	return resolveConfig(state);
 }
 
 const UPGRADE_PATH: Record<BaseUnitType, Tier2UnitType> = {
@@ -1105,10 +1174,18 @@ function buildCanonicalBoard(config: EngineConfig): HexState[] {
 	}
 	const board: HexState[] = [];
 	for (let row = 0; row < ROWS; row++) {
-		const rowTerrain = CANONICAL_TERRAIN[row]!;
+		const rowTerrain = CANONICAL_TERRAIN[row];
+		if (!rowTerrain) {
+			throw new Error(`Missing canonical terrain row ${row}`);
+		}
 		for (let col = 0; col < config.boardColumns; col++) {
 			const canonicalCol = canonicalColForBoardCol(col, config.boardColumns);
-			const token = rowTerrain[canonicalCol]!;
+			const token = rowTerrain[canonicalCol];
+			if (!token) {
+				throw new Error(
+					`Missing canonical terrain token row=${row} col=${canonicalCol}`,
+				);
+			}
 			const hexType = TOKEN_TO_HEX_TYPE[token];
 			const id = toHexId(row, col);
 
@@ -1145,20 +1222,25 @@ function buildCanonicalBoard(config: EngineConfig): HexState[] {
 // State helpers
 // ---------------------------------------------------------------------------
 
+function boardColumnsForState(state: MatchState): 17 | 21 {
+	return inferBoardColumnsFromBoard(state.board);
+}
+
 function getHex(state: MatchState, id: HexId): HexState | null {
-	if (!isValidHexId(id)) return null;
-	return state.board[hexIdIndex(id)] ?? null;
+	const boardColumns = boardColumnsForState(state);
+	if (!isValidHexId(id, boardColumns)) return null;
+	return state.board[hexIdIndex(id, boardColumns)] ?? null;
 }
 
 function addUnitToHex(state: MatchState, hexId: HexId, unitId: string) {
-	const idx = hexIdIndex(hexId);
+	const idx = hexIdIndex(hexId, boardColumnsForState(state));
 	const existing = state.board[idx];
 	if (!existing) return;
 	state.board[idx] = { ...existing, unitIds: [...existing.unitIds, unitId] };
 }
 
 function removeUnitFromHex(state: MatchState, hexId: HexId, unitId: string) {
-	const idx = hexIdIndex(hexId);
+	const idx = hexIdIndex(hexId, boardColumnsForState(state));
 	const existing = state.board[idx];
 	if (!existing) return;
 	state.board[idx] = {
@@ -1168,7 +1250,7 @@ function removeUnitFromHex(state: MatchState, hexId: HexId, unitId: string) {
 }
 
 function clearHexUnits(state: MatchState, hexId: HexId) {
-	const idx = hexIdIndex(hexId);
+	const idx = hexIdIndex(hexId, boardColumnsForState(state));
 	const existing = state.board[idx];
 	if (!existing) return;
 	state.board[idx] = { ...existing, unitIds: [] };
@@ -1255,7 +1337,7 @@ function nextUnitId(state: MatchState, side: PlayerSide): string {
 }
 
 function cloneState(state: MatchState): MatchState {
-	return {
+	const cloned: MatchState = {
 		...state,
 		players: {
 			A: {
@@ -1269,6 +1351,7 @@ function cloneState(state: MatchState): MatchState {
 		},
 		board: state.board.map((h) => ({ ...h, unitIds: [...h.unitIds] })),
 	};
+	return bindConfig(cloned, resolveConfig(state));
 }
 
 function sortUnits(units: Unit[]): Unit[] {
@@ -1297,7 +1380,7 @@ function runStartOfPlayerTurnTick(
 	state: MatchState,
 	side: PlayerSide,
 ): TickResult {
-	const config = resolveConfig();
+	const config = resolveConfig(state);
 	const player = state.players[side];
 	const enemy = state.players[otherSide(side)];
 
@@ -1393,8 +1476,9 @@ function computeLoS(
 	targetPos: HexId,
 	state: MatchState,
 ): { clear: boolean; reason?: string } {
-	const attackerNeighbors = new Set(neighborsOf(attackerPos));
-	const targetNeighbors = new Set(neighborsOf(targetPos));
+	const boardColumns = boardColumnsForState(state);
+	const attackerNeighbors = new Set(neighborsOf(attackerPos, boardColumns));
+	const targetNeighbors = new Set(neighborsOf(targetPos, boardColumns));
 
 	const shared: HexId[] = [];
 	for (const n of attackerNeighbors) {
@@ -1405,7 +1489,10 @@ function computeLoS(
 		return { clear: false, reason: "No straight line (shared neighbors != 1)" };
 	}
 
-	const midHex = shared[0]!;
+	const midHex = shared[0];
+	if (!midHex) {
+		return { clear: false, reason: "No shared mid hex" };
+	}
 	const targetHex = getHex(state, targetPos);
 	const midHexState = getHex(state, midHex);
 
@@ -1471,13 +1558,16 @@ function computeCombat(
 	dist: number,
 	initiatingAttackerId: string,
 ): CombatResult {
-	const config = resolveConfig();
+	const config = resolveConfig(state);
 	const abilities: string[] = [];
 
 	const leadAttacker =
 		attackers.find((attacker) => attacker.id === initiatingAttackerId) ??
-		attackers[0]!;
-	const leadDefender = defenders[0]!;
+		attackers[0];
+	const leadDefender = defenders[0];
+	if (!leadAttacker || !leadDefender) {
+		throw new Error("Combat requires at least one attacker and one defender");
+	}
 
 	// Attack power: base ATK + attacker bonus + stack bonus + cavalry charge
 	let attackPower = config.unitStats[leadAttacker.type].attack;
@@ -1528,7 +1618,10 @@ function computeCombat(
 
 	// Shield Wall: +1 per adjacent hex with friendly infantry, max +2
 	if (isInfantryLine(leadDefender.type)) {
-		const adjacentIds = neighborsOf(leadDefender.position);
+		const adjacentIds = neighborsOf(
+			leadDefender.position,
+			boardColumnsForState(state),
+		);
 		let shieldWallBonus = 0;
 		for (const adjId of adjacentIds) {
 			const adjHex = getHex(state, adjId);
@@ -1634,7 +1727,7 @@ function computeImmediateTerminal(state: MatchState): TerminalState {
 }
 
 function computeTurnLimitTerminal(state: MatchState): TerminalState {
-	const config = resolveConfig();
+	const config = resolveConfig(state);
 	if (state.turn <= config.turnLimit) return { ended: false };
 
 	// Timeout tiebreakers: VP > unit value > hex count > draw
@@ -1678,7 +1771,7 @@ function computeTerminal(state: MatchState): TerminalState {
 }
 
 function unitValue(state: MatchState, side: PlayerSide): number {
-	const config = resolveConfig();
+	const config = resolveConfig(state);
 	let total = 0;
 	for (const unit of state.players[side].units) {
 		total += config.unitStats[unit.type].cost;
@@ -1708,7 +1801,8 @@ function applyControlUpdate(
 	}[] = [];
 	for (const hex of state.board) {
 		if (hex.unitIds.length > 0) {
-			const firstUnit = getUnit(state, hex.unitIds[0]!);
+			const firstUnitId = hex.unitIds[0];
+			const firstUnit = firstUnitId ? getUnit(state, firstUnitId) : null;
 			const nextOwner = firstUnit ? firstUnit.owner : hex.controlledBy;
 			if (nextOwner !== hex.controlledBy) {
 				changes.push({
@@ -1738,7 +1832,6 @@ export function createInitialState(
 	}
 	const [playerA, playerB] = players as [AgentId, AgentId];
 	const config = mergeConfig(configInput);
-	_activeConfig = config;
 
 	const board = buildCanonicalBoard(config);
 
@@ -1766,6 +1859,8 @@ export function createInitialState(
 		board,
 		status: "active",
 	};
+
+	bindConfig(state, config);
 
 	// Place starting units (spec Section 6.3)
 	const startingUnits: Array<{
@@ -1840,7 +1935,8 @@ export function winner(state: MatchState): AgentId | null {
 
 export function listLegalMoves(state: MatchState): Move[] {
 	if (state.status === "ended") return [];
-	const config = resolveConfig();
+	const config = resolveConfig(state);
+	const boardColumns = config.boardColumns;
 	const side = state.activePlayer;
 	const player = state.players[side];
 	const moves: Move[] = [];
@@ -1899,7 +1995,12 @@ export function listLegalMoves(state: MatchState): Move[] {
 				}
 			}
 
-			const reachable = reachableHexes(unit.position, movementRange, blocked);
+			const reachable = reachableHexes(
+				unit.position,
+				movementRange,
+				blocked,
+				boardColumns,
+			);
 			for (const hexId of sortHexIds(reachable)) {
 				moves.push({ action: "move", unitId: unit.id, to: hexId });
 			}
@@ -1922,7 +2023,7 @@ export function listLegalMoves(state: MatchState): Move[] {
 			const range = config.unitStats[unit.type].range;
 			const targets = new Set<HexId>();
 			for (const enemyPos of enemyPositions) {
-				const dist = hexDistance(unit.position, enemyPos);
+				const dist = hexDistance(unit.position, enemyPos, boardColumns);
 				if (dist !== null && dist >= 1 && dist <= range) {
 					if (dist === 2) {
 						const los = computeLoS(unit.position, enemyPos, state);
@@ -1986,7 +2087,8 @@ export function validateMove(
 		};
 	}
 
-	const config = resolveConfig();
+	const config = resolveConfig(state);
+	const boardColumns = config.boardColumns;
 	const m = parsed.data;
 	const side = state.activePlayer;
 	const player = state.players[side];
@@ -2069,7 +2171,7 @@ export function validateMove(
 					error: "Unit already moved this turn.",
 				};
 			}
-			if (!isValidHexId(m.to)) {
+			if (!isValidHexId(m.to, boardColumns)) {
 				return {
 					ok: false,
 					reason: "illegal_move",
@@ -2124,7 +2226,7 @@ export function validateMove(
 					blocked.add(hex.id);
 				}
 			}
-			const dist = pathDistance(unit.position, m.to, blocked);
+			const dist = pathDistance(unit.position, m.to, blocked, boardColumns);
 			if (dist == null || dist > config.unitStats[unit.type].movement) {
 				return {
 					ok: false,
@@ -2157,7 +2259,7 @@ export function validateMove(
 					error: "Unit already attacked this turn.",
 				};
 			}
-			if (!isValidHexId(m.target)) {
+			if (!isValidHexId(m.target, boardColumns)) {
 				return {
 					ok: false,
 					reason: "illegal_move",
@@ -2173,14 +2275,14 @@ export function validateMove(
 				};
 			}
 			const targetUnits = getUnitsOnHex(state, m.target);
-			if (targetUnits.length === 0 || targetUnits[0]!.owner === side) {
+			if (targetUnits.length === 0 || targetUnits[0]?.owner === side) {
 				return {
 					ok: false,
 					reason: "illegal_move",
 					error: "Target must be enemy.",
 				};
 			}
-			const dist = hexDistance(unit.position, m.target);
+			const dist = hexDistance(unit.position, m.target, boardColumns);
 			if (dist == null || dist > config.unitStats[unit.type].range) {
 				return {
 					ok: false,
@@ -2322,7 +2424,8 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 	}
 
 	const m = validation.move;
-	const config = resolveConfig();
+	const config = resolveConfig(state);
+	const boardColumns = config.boardColumns;
 	const nextState = cloneState(state);
 	const side = nextState.activePlayer;
 	const player = nextState.players[side];
@@ -2382,7 +2485,7 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 					blocked.add(hex.id);
 				}
 			}
-			const dist = pathDistance(unit.position, m.to, blocked);
+			const dist = pathDistance(unit.position, m.to, blocked, boardColumns);
 			if (dist == null) {
 				return failMove(nextState, m, "invalid_move", "Move path not found.");
 			}
@@ -2397,6 +2500,7 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 					dist,
 					blocked,
 					nextState.board,
+					boardColumns,
 				);
 			}
 
@@ -2428,11 +2532,19 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 			if (defenders.length === 0) {
 				return failMove(nextState, m, "invalid_move", "Defender missing.");
 			}
+			const leadDefender = defenders[0];
+			if (!leadDefender) {
+				return failMove(nextState, m, "invalid_move", "Defender missing.");
+			}
 
 			const attackerFrom = leadAttacker.position;
 			const defenderIds = defenders.map((d) => d.id);
 			const dist =
-				hexDistance(leadAttacker.position, defenders[0]!.position) ?? 0;
+				hexDistance(
+					leadAttacker.position,
+					leadDefender.position,
+					boardColumns,
+				) ?? 0;
 			const ranged = dist > 1;
 
 			const combat = computeCombat(
@@ -2666,7 +2778,7 @@ export function applyMove(state: MatchState, move: Move): ApplyMoveResult {
 
 export function renderAscii(state: MatchState): string {
 	const lines: string[] = [];
-	const cols = currentCols();
+	const cols = boardColumnsForState(state);
 
 	// Header row with column numbers
 	const headerCells: string[] = [];
@@ -2676,7 +2788,7 @@ export function renderAscii(state: MatchState): string {
 	lines.push(`    ${headerCells.join("")}`);
 
 	for (let row = 0; row < ROWS; row++) {
-		const rowLabel = ROW_LETTERS[row]!;
+		const rowLabel = ROW_LETTERS[row] ?? "?";
 		const cells: string[] = [];
 		for (let col = 0; col < cols; col++) {
 			const id = toHexId(row, col);
@@ -2685,8 +2797,8 @@ export function renderAscii(state: MatchState): string {
 				cells.push(" ?? ");
 				continue;
 			}
-			const unit =
-				hex.unitIds.length > 0 ? getUnit(state, hex.unitIds[0]!) : null;
+			const firstUnitId = hex.unitIds[0];
+			const unit = firstUnitId ? getUnit(state, firstUnitId) : null;
 			const owner = unit?.owner ?? hex.controlledBy ?? ".";
 			const stackCount = hex.unitIds.length;
 			const content = unit
@@ -2809,6 +2921,15 @@ export const SpectatorEventSchema = z.discriminatedUnion("event", [
 		move: MoveSchema,
 		engineEvents: z.array(z.unknown()),
 		ts: z.string(),
+	}),
+	z.object({
+		eventVersion: z.literal(1),
+		event: z.literal("match_ended"),
+		matchId: z.string(),
+		winnerAgentId: z.string().nullable().optional(),
+		loserAgentId: z.string().nullable().optional(),
+		reason: z.string().optional(),
+		reasonCode: z.string().optional(),
 	}),
 	z.object({
 		eventVersion: z.literal(1),

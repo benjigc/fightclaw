@@ -47,6 +47,7 @@ export interface HarnessConfig {
 
 export interface BoardgameHarnessState {
 	matchState: MatchState;
+	engineConfig: EngineConfigInput;
 	turnIndex: number;
 	playerMap: Record<string, AgentId>;
 	reversePlayerMap: Record<string, string>;

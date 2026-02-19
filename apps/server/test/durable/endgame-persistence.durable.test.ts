@@ -33,19 +33,25 @@ it("finalizes match persistence after finish (no SSE)", async () => {
 	const matchRow = await pollUntil(
 		async () =>
 			await env.DB.prepare(
-				"SELECT status, ended_at, winner_agent_id FROM matches WHERE id = ?",
+				"SELECT status, ended_at, winner_agent_id, end_reason, final_state_version, mode FROM matches WHERE id = ?",
 			)
 				.bind(matchId)
 				.first<{
 					status: string | null;
 					ended_at: string | null;
 					winner_agent_id: string | null;
+					end_reason: string | null;
+					final_state_version: number | null;
+					mode: string | null;
 				}>(),
 		(row) => Boolean(row?.ended_at),
 	);
 
 	expect(matchRow?.status).toBe("ended");
 	expect(matchRow?.ended_at).not.toBeNull();
+	expect(matchRow?.end_reason).toBe("forfeit");
+	expect(typeof matchRow?.final_state_version).toBe("number");
+	expect(matchRow?.mode).toBe("ranked");
 
 	const resultRow = await env.DB.prepare(
 		"SELECT winner_agent_id, loser_agent_id, reason FROM match_results WHERE match_id = ?",
@@ -78,4 +84,11 @@ it("finalizes match persistence after finish (no SSE)", async () => {
 		expect((loserRow?.games_played ?? 0) >= 1).toBe(true);
 		expect((loserRow?.losses ?? 0) >= 1).toBe(true);
 	}
+
+	const endedEvents = await env.DB.prepare(
+		"SELECT COUNT(*) as count FROM match_events WHERE match_id = ? AND event_type = 'match_ended'",
+	)
+		.bind(matchId)
+		.first<{ count: number }>();
+	expect(endedEvents?.count).toBe(1);
 });

@@ -8,10 +8,15 @@ import {
 import { Engine } from "../engineAdapter";
 import { mulberry32 } from "../rng";
 import type { Bot, MatchLog, MatchResult, Move } from "../types";
-import { applyEngineMoveChecked, mapActiveSideToPlayerID } from "./adapter";
+import {
+	applyEngineMoveChecked,
+	bindHarnessMatchState,
+	mapActiveSideToPlayerID,
+} from "./adapter";
 import { ArtifactBuilder, sha256, stableStringify } from "./artifact";
 import { createFightclawGame } from "./createGame";
 import type {
+	BoardgameHarnessState,
 	HarnessConfig,
 	MoveValidationMode,
 	ScenarioName,
@@ -35,6 +40,16 @@ interface BoardgameRunnerOptions {
 	storeFullPrompt: boolean;
 	storeFullOutput: boolean;
 }
+
+type EngineMatchState = Parameters<Bot["chooseMove"]>[0]["state"];
+
+type BoardgameClientState = {
+	G: BoardgameHarnessState;
+	ctx: {
+		currentPlayer: string;
+	};
+	log?: unknown[];
+};
 
 export async function playMatchBoardgameIO(
 	opts: BoardgameRunnerOptions,
@@ -118,13 +133,12 @@ export async function playMatchBoardgameIO(
 			const activeAgent = Engine.currentPlayer(state.G.matchState);
 			const actingPlayerID = state.ctx.currentPlayer;
 			const expectedPlayerID = mapActiveSideToPlayerID(state.G.matchState);
-			if (actingPlayerID !== expectedPlayerID) {
-				const msg = `Harness divergence: ctx.currentPlayer=${actingPlayerID} expected=${expectedPlayerID}`;
-				if (opts.strict) {
-					throw new Error(msg);
-				}
-				console.warn(msg);
-			}
+			reportPlayerMappingDivergence({
+				actualPlayerID: actingPlayerID,
+				expectedPlayerID,
+				strict: opts.strict,
+				context: "Harness divergence",
+			});
 
 			const bot = opts.players.find((p) => p.id === activeAgent);
 			if (!bot) {
@@ -161,12 +175,7 @@ export async function playMatchBoardgameIO(
 
 			for (const move of plan.moves) {
 				const current = requireState(client.getState());
-				const midTerminal = Engine.isTerminal(current.G.matchState);
-				if (midTerminal.ended) {
-					turnComplete = true;
-					break;
-				}
-				if (Engine.currentPlayer(current.G.matchState) !== activeAgent) {
+				if (shouldStopPlannedTurn(current.G.matchState, activeAgent)) {
 					turnComplete = true;
 					break;
 				}
@@ -185,15 +194,17 @@ export async function playMatchBoardgameIO(
 						accepted: false,
 						rejectionReason: checked.rejectionReason,
 					});
-					if (opts.invalidPolicy === "forfeit") {
+					const invalidPolicyOutcome = evaluateInvalidMovePolicy({
+						policy: opts.invalidPolicy,
+						activeAgent,
+						playerIds,
+						stopTurnOnForfeit: true,
+					});
+					if (invalidPolicyOutcome.forfeitTriggered) {
 						forfeitTriggered = true;
-						forfeitWinner = String(
-							playerIds.find((id) => id !== activeAgent) ?? "",
-						);
-						turnComplete = true;
-						break;
+						forfeitWinner = invalidPolicyOutcome.forfeitWinner;
 					}
-					if (opts.invalidPolicy === "stop_turn") {
+					if (invalidPolicyOutcome.stopTurn) {
 						turnComplete = true;
 						break;
 					}
@@ -257,13 +268,8 @@ export async function playMatchBoardgameIO(
 			// as full turns, which can artificially inflate maxTurns endings.
 			if (!forfeitTriggered) {
 				const current = requireState(client.getState());
-				const midTerminal = Engine.isTerminal(current.G.matchState);
-				const stillActive =
-					!midTerminal.ended &&
-					Engine.currentPlayer(current.G.matchState) === activeAgent &&
-					current.G.matchState.actionsRemaining > 0;
 
-				if (stillActive) {
+				if (shouldForceEndTurn(current.G.matchState, activeAgent)) {
 					const forcedEndTurn: Move = { action: "end_turn" };
 					const checked = applyEngineMoveChecked({
 						state: current.G.matchState,
@@ -294,13 +300,17 @@ export async function playMatchBoardgameIO(
 							accepted: false,
 							rejectionReason: checked.rejectionReason,
 						});
-						if (opts.invalidPolicy === "forfeit") {
+						const invalidPolicyOutcome = evaluateInvalidMovePolicy({
+							policy: opts.invalidPolicy,
+							activeAgent,
+							playerIds,
+							stopTurnOnForfeit: false,
+						});
+						if (invalidPolicyOutcome.forfeitTriggered) {
 							forfeitTriggered = true;
-							forfeitWinner = String(
-								playerIds.find((id) => id !== activeAgent) ?? "",
-							);
+							forfeitWinner = invalidPolicyOutcome.forfeitWinner;
 						}
-						if (opts.invalidPolicy === "stop_turn") {
+						if (invalidPolicyOutcome.stopTurn) {
 							turnComplete = true;
 						}
 					}
@@ -312,28 +322,25 @@ export async function playMatchBoardgameIO(
 			}
 
 			const afterBatch = requireState(client.getState());
-			const afterTerminal = Engine.isTerminal(afterBatch.G.matchState);
-			const engineChangedPlayer =
-				Engine.currentPlayer(afterBatch.G.matchState) !== activeAgent;
-			const engineTurnComplete =
-				turnComplete || afterTerminal.ended || engineChangedPlayer;
-
 			if (
-				!afterTerminal.ended &&
-				engineTurnComplete &&
-				afterBatch.ctx.currentPlayer === actingPlayerID
+				shouldEmitBoardgameEndTurn({
+					state: afterBatch.G.matchState,
+					ctxCurrentPlayerID: afterBatch.ctx.currentPlayer,
+					actingPlayerID,
+					activeAgent,
+					turnComplete,
+				})
 			) {
 				client.updatePlayerID(actingPlayerID);
 				client.events.endTurn?.();
 				const postTurn = requireState(client.getState());
 				const mapped = mapActiveSideToPlayerID(postTurn.G.matchState);
-				if (mapped !== postTurn.ctx.currentPlayer) {
-					const msg = `Post-endTurn divergence: ctx.currentPlayer=${postTurn.ctx.currentPlayer} expected=${mapped}`;
-					if (opts.strict) {
-						throw new Error(msg);
-					}
-					console.warn(msg);
-				}
+				reportPlayerMappingDivergence({
+					actualPlayerID: postTurn.ctx.currentPlayer,
+					expectedPlayerID: mapped,
+					strict: opts.strict,
+					context: "Post-endTurn divergence",
+				});
 			}
 
 			const turnEndState = requireState(client.getState()).G.matchState;
@@ -412,11 +419,117 @@ export async function playMatchBoardgameIO(
 	}
 }
 
-function requireState<T>(state: T | null): T {
+function requireState(
+	state: BoardgameClientState | null,
+): BoardgameClientState {
 	if (!state) {
 		throw new Error("boardgame client state is null");
 	}
-	return state;
+	const matchState = bindHarnessMatchState(state.G);
+	if (state.G.matchState === matchState) return state;
+	return {
+		...state,
+		G: {
+			...state.G,
+			matchState,
+		},
+	};
+}
+
+function reportPlayerMappingDivergence(input: {
+	actualPlayerID: string;
+	expectedPlayerID: string;
+	strict: boolean;
+	context: string;
+}): void {
+	if (input.actualPlayerID === input.expectedPlayerID) {
+		return;
+	}
+	const msg = `${input.context}: ctx.currentPlayer=${input.actualPlayerID} expected=${input.expectedPlayerID}`;
+	if (input.strict) {
+		throw new Error(msg);
+	}
+	console.warn(msg);
+}
+
+function shouldStopPlannedTurn(
+	state: EngineMatchState,
+	activeAgent: string,
+): boolean {
+	if (Engine.isTerminal(state).ended) {
+		return true;
+	}
+	return Engine.currentPlayer(state) !== activeAgent;
+}
+
+function shouldForceEndTurn(
+	state: EngineMatchState,
+	activeAgent: string,
+): boolean {
+	if (Engine.isTerminal(state).ended) {
+		return false;
+	}
+	if (Engine.currentPlayer(state) !== activeAgent) {
+		return false;
+	}
+	return state.actionsRemaining > 0;
+}
+
+function evaluateInvalidMovePolicy(input: {
+	policy: HarnessConfig["invalidPolicy"];
+	activeAgent: string;
+	playerIds: string[];
+	stopTurnOnForfeit: boolean;
+}): {
+	forfeitTriggered: boolean;
+	forfeitWinner: string | null;
+	stopTurn: boolean;
+} {
+	if (input.policy === "forfeit") {
+		return {
+			forfeitTriggered: true,
+			forfeitWinner: resolveForfeitWinner(input.activeAgent, input.playerIds),
+			stopTurn: input.stopTurnOnForfeit,
+		};
+	}
+	if (input.policy === "stop_turn") {
+		return {
+			forfeitTriggered: false,
+			forfeitWinner: null,
+			stopTurn: true,
+		};
+	}
+	return {
+		forfeitTriggered: false,
+		forfeitWinner: null,
+		stopTurn: false,
+	};
+}
+
+function resolveForfeitWinner(
+	activeAgent: string,
+	playerIds: string[],
+): string {
+	return String(playerIds.find((id) => id !== activeAgent) ?? "");
+}
+
+function shouldEmitBoardgameEndTurn(input: {
+	state: EngineMatchState;
+	ctxCurrentPlayerID: string;
+	actingPlayerID: string;
+	activeAgent: string;
+	turnComplete: boolean;
+}): boolean {
+	const terminal = Engine.isTerminal(input.state);
+	const engineChangedPlayer =
+		Engine.currentPlayer(input.state) !== input.activeAgent;
+	const engineTurnComplete =
+		input.turnComplete || terminal.ended || engineChangedPlayer;
+	return (
+		!terminal.ended &&
+		engineTurnComplete &&
+		input.ctxCurrentPlayerID === input.actingPlayerID
+	);
 }
 
 function hashState(state: unknown): string {
@@ -582,8 +695,8 @@ function clipText(input: string, maxChars: number): string {
 }
 
 function buildTurnMetricsV2(
-	before: Parameters<Bot["chooseMove"]>[0]["state"],
-	after: Parameters<Bot["chooseMove"]>[0]["state"],
+	before: EngineMatchState,
+	after: EngineMatchState,
 	playerID: string,
 	attempts: Array<{ accepted: boolean; move: Move }>,
 ): TurnMetricsV2 {
@@ -686,7 +799,7 @@ function buildTurnMetricsV2(
 }
 
 function estimateUpgradeSpend(
-	before: Parameters<Bot["chooseMove"]>[0]["state"],
+	before: EngineMatchState,
 	side: "A" | "B",
 	accepted: Array<{ accepted: boolean; move: Move }>,
 ): {
@@ -726,7 +839,7 @@ function sumHp(units: Array<{ hp: number }>): number {
 }
 
 function avgDistanceToEnemyStronghold(
-	state: Parameters<Bot["chooseMove"]>[0]["state"],
+	state: EngineMatchState,
 	side: "A" | "B",
 ): number | null {
 	const enemyStrongholdType = side === "A" ? "stronghold_b" : "stronghold_a";
@@ -755,7 +868,7 @@ async function chooseTurnPlan(opts: {
 	bot: Bot;
 	state: BoardgameRunnerOptions["engineConfig"] extends never
 		? never
-		: Parameters<Bot["chooseMove"]>[0]["state"];
+		: EngineMatchState;
 	legalMoves: Move[];
 	turnIndex: number;
 	rng: () => number;
@@ -765,7 +878,7 @@ async function chooseTurnPlan(opts: {
 	const fallbackPrompt = encodeState(opts.state, side);
 	const detailed = opts.bot as Bot & {
 		chooseTurnWithMeta?: (ctx: {
-			state: Parameters<Bot["chooseMove"]>[0]["state"];
+			state: EngineMatchState;
 			legalMoves: Move[];
 			turn: number;
 			rng: () => number;

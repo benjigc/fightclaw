@@ -1,7 +1,9 @@
 import {
 	applyMove,
+	createInitialState,
+	DEFAULT_CONFIG,
+	type EngineConfigInput,
 	type EngineEvent,
-	initialState,
 	type MatchState,
 	type Move,
 } from "@fightclaw/engine";
@@ -258,6 +260,9 @@ function SpectatorLanding() {
 					: null;
 				const seedRaw = startedPayload?.seed;
 				const playersRaw = startedPayload?.players;
+				const replayEngineConfig = parseReplayEngineConfig(
+					startedPayload?.engineConfig,
+				);
 
 				const seed =
 					typeof seedRaw === "number" && Number.isFinite(seedRaw)
@@ -277,7 +282,7 @@ function SpectatorLanding() {
 					players,
 				});
 
-				let state = initialState(seed, players);
+				let state = createInitialState(seed, replayEngineConfig, players);
 				setLatestState(state);
 				setConnectionStatus("replay");
 
@@ -523,4 +528,49 @@ function parseStateFromEnvelope(input: unknown): MatchState | null {
 	}
 
 	return null;
+}
+
+function parseReplayEngineConfig(
+	input: unknown,
+): EngineConfigInput | undefined {
+	if (!isRecord(input)) return undefined;
+	const sanitized = sanitizeEngineConfigInput(input, DEFAULT_CONFIG);
+	return sanitized as EngineConfigInput | undefined;
+}
+
+function sanitizeEngineConfigInput(
+	input: unknown,
+	template: unknown,
+	path = "",
+): unknown | undefined {
+	if (typeof template === "number") {
+		if (typeof input !== "number" || !Number.isFinite(input)) {
+			return undefined;
+		}
+		if (path === "boardColumns" && input !== 17 && input !== 21) {
+			return undefined;
+		}
+		return input;
+	}
+	if (!isRecord(template) || Array.isArray(template)) {
+		return undefined;
+	}
+	if (!isRecord(input)) {
+		return undefined;
+	}
+	const out: Record<string, unknown> = {};
+	for (const key of Object.keys(template)) {
+		if (!(key in input)) continue;
+		const nextPath = path ? `${path}.${key}` : key;
+		const sanitized = sanitizeEngineConfigInput(
+			input[key],
+			(template as Record<string, unknown>)[key],
+			nextPath,
+		);
+		if (sanitized === undefined) {
+			return undefined;
+		}
+		out[key] = sanitized;
+	}
+	return out;
 }

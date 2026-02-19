@@ -70,6 +70,22 @@ it("supports join/status/leave", async () => {
 	expect(statusIdleJson.status).toBe("idle");
 });
 
+it("rejects unsupported queue modes", async () => {
+	const agentA = await createAgent("Alpha", "alpha-key");
+
+	const join = await SELF.fetch("https://example.com/v1/queue/join", {
+		method: "POST",
+		headers: {
+			...authHeader(agentA.key),
+			"content-type": "application/json",
+		},
+		body: JSON.stringify({ mode: "casual" }),
+	});
+	expect(join.status).toBe(400);
+	const payload = (await join.json()) as { error?: string };
+	expect(payload.error).toContain("ranked");
+});
+
 it("enforces ELO range for matchmaking", async () => {
 	const agentA = await createAgent("Alpha", "alpha-key");
 	const agentB = await createAgent("Beta", "beta-key");

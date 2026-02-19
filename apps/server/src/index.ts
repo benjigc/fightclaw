@@ -19,9 +19,20 @@ import { matchesRoutes } from "./routes/matches";
 import { internalPromptsRoutes, promptsRoutes } from "./routes/prompts";
 import { queueRoutes } from "./routes/queue";
 import { systemRoutes } from "./routes/system";
+import { doFetchWithRetry } from "./utils/durable";
 import { forbidden, tooManyRequests } from "./utils/httpErrors";
 
 const app = new Hono<{ Bindings: AppBindings; Variables: AppVariables }>();
+
+const getMatchmakerStub = (env: AppBindings) => {
+	const id = env.MATCHMAKER.idFromName("global");
+	return env.MATCHMAKER.get(id);
+};
+
+const getMatchStub = (env: AppBindings, matchId: string) => {
+	const id = env.MATCH.idFromName(matchId);
+	return env.MATCH.get(id);
+};
 
 // Shared contracts (PR0): requestId + structured logs.
 app.use("/*", requestContext);
@@ -134,6 +145,85 @@ app.use("/v1/queue/*", async (c, next) => {
 	return requireAgentAuth(c, async () => {
 		return requireVerifiedAgent(c, next);
 	});
+});
+
+app.get("/ws", async (c) => {
+	const authResponse = await requireAgentAuth(c, async () => {});
+	if (authResponse) return authResponse;
+	const verifiedResponse = await requireVerifiedAgent(c, async () => {});
+	if (verifiedResponse) return verifiedResponse;
+
+	if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
+		return c.text("Expected websocket upgrade.", 426);
+	}
+	const agentId = c.get("agentId");
+	if (!agentId) return c.text("Unauthorized", 401);
+
+	const stub = getMatchmakerStub(c.env);
+	const upstream = await stub.fetch(c.req.raw);
+	if (upstream.status !== 101) {
+		return c.text(`WebSocket upgrade failed (${upstream.status}).`, 503);
+	}
+
+	return upstream;
+});
+
+app.get("/v1/matches/:id/ws", async (c) => {
+	const verifiedResponse = await requireVerifiedAgent(c, async () => {});
+	if (verifiedResponse) return verifiedResponse;
+
+	if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
+		return c.text("Expected websocket upgrade.", 426);
+	}
+
+	const agentId = c.get("agentId");
+	const matchId = c.req.param("id");
+	if (!agentId || !matchId) return c.text("Unauthorized", 401);
+
+	const matchmakerStub = getMatchmakerStub(c.env);
+	const queueStatusResp = await doFetchWithRetry(
+		matchmakerStub,
+		"https://do/queue/status",
+		{
+			headers: {
+				"x-agent-id": agentId,
+				"x-request-id": c.get("requestId"),
+			},
+		},
+	);
+	if (!queueStatusResp.ok) return c.text("Forbidden", 403);
+	const queueStatus = (await queueStatusResp.json()) as {
+		status?: string;
+		matchId?: string;
+	};
+	if (queueStatus.status !== "ready" || queueStatus.matchId !== matchId) {
+		return c.text("Agent is not currently matched to this match.", 409);
+	}
+
+	const matchStub = getMatchStub(c.env, matchId);
+	const stateResp = await doFetchWithRetry(matchStub, "https://do/state", {
+		headers: {
+			"x-match-id": matchId,
+			"x-request-id": c.get("requestId"),
+		},
+	});
+	if (!stateResp.ok) return c.text("Match unavailable.", 404);
+	const statePayload = (await stateResp.json()) as {
+		state?: { players?: string[] } | null;
+	};
+	const players = Array.isArray(statePayload.state?.players)
+		? statePayload.state?.players
+		: [];
+	if (!players.includes(agentId)) {
+		return c.text("Agent is not a participant in this match.", 403);
+	}
+
+	const upstream = await matchStub.fetch(c.req.raw);
+	if (upstream.status !== 101) {
+		return c.text(`WebSocket upgrade failed (${upstream.status}).`, 503);
+	}
+
+	return upstream;
 });
 
 // Workstream A routes.

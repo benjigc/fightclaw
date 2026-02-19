@@ -1,7 +1,8 @@
 import { EventSchema, initialState } from "@fightclaw/engine";
 import { describe, expect, it } from "vitest";
 import {
-	buildGameEndedEvent,
+	buildGameEndedAliasEvent,
+	buildMatchEndedEvent,
 	buildMatchFoundEvent,
 	buildNoEventsEvent,
 	buildStateEvent,
@@ -17,12 +18,25 @@ describe("event builders", () => {
 		expect(EventSchema.safeParse(event).success).toBe(true);
 	});
 
-	it("builds game_ended with version", () => {
-		const event = buildGameEndedEvent("match-1", "winner", "loser", "forfeit");
+	it("builds match_ended with version", () => {
+		const event = buildMatchEndedEvent("match-1", "winner", "loser", "forfeit");
 		expect(event.eventVersion).toBe(1);
-		expect(event.event).toBe("game_ended");
+		expect(event.event).toBe("match_ended");
 		expect(event.reasonCode).toBe(event.reason);
 		expect(EventSchema.safeParse(event).success).toBe(true);
+	});
+
+	it("builds game_ended alias from canonical payload", () => {
+		const canonical = buildMatchEndedEvent(
+			"match-1",
+			"winner",
+			"loser",
+			"forfeit",
+		);
+		const alias = buildGameEndedAliasEvent(canonical);
+		expect(alias.event).toBe("game_ended");
+		expect(alias.reasonCode).toBe(alias.reason);
+		expect(EventSchema.safeParse(alias).success).toBe(true);
 	});
 
 	it("builds your_turn with version", () => {

@@ -1,7 +1,16 @@
 import { MoveSchema } from "@fightclaw/engine";
 import { Engine } from "../engineAdapter";
 import type { AgentId, EngineEvent, MatchState, Move } from "../types";
-import type { MoveValidationMode } from "./types";
+import type { BoardgameHarnessState, MoveValidationMode } from "./types";
+
+export function bindHarnessMatchState(
+	harnessState: Pick<BoardgameHarnessState, "matchState" | "engineConfig">,
+): MatchState {
+	return Engine.bindEngineConfig(
+		harnessState.matchState,
+		harnessState.engineConfig,
+	);
+}
 
 export function createPlayerMap(players: [AgentId, AgentId]) {
 	const playerMap: Record<string, AgentId> = {

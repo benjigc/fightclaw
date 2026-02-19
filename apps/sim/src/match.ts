@@ -115,6 +115,42 @@ async function playMatchLegacy(opts: {
 		};
 	};
 
+	const endDiagnosticsIfNeeded = (matchResult: MatchResult): void => {
+		if (opts.enableDiagnostics) {
+			getDiagnosticsCollector().endGame(matchResult.winner, matchResult.reason);
+		}
+	};
+
+	const completeMatch = (
+		turns: number,
+		winner: MatchResult["winner"],
+		reason: MatchResult["reason"],
+	): MatchResult => {
+		const matchResult: MatchResult = {
+			seed: opts.seed,
+			turns,
+			winner,
+			illegalMoves,
+			reason,
+			log: logIfNeeded(),
+		};
+		endDiagnosticsIfNeeded(matchResult);
+		return matchResult;
+	};
+
+	const failIllegal = (turn: number): MatchResult =>
+		completeMatch(turn - 1, null, "illegal");
+
+	const isMoveLegal = (
+		candidateMove: Move,
+		currentLegalMoves: Move[],
+	): boolean =>
+		currentLegalMoves.some(
+			(legalMove) =>
+				safeJson(stripReasoning(legalMove)) ===
+				safeJson(stripReasoning(candidateMove)),
+		);
+
 	for (let turn = 1; turn <= opts.maxTurns; turn++) {
 		const active = Engine.currentPlayer(state);
 		const bot = opts.players.find((p) => p.id === active);
@@ -122,18 +158,7 @@ async function playMatchLegacy(opts: {
 
 		const terminal = Engine.isTerminal(state);
 		if (terminal.ended) {
-			const result: MatchResult = {
-				seed: opts.seed,
-				turns: turn - 1,
-				winner: terminal.winner ?? null,
-				illegalMoves,
-				reason: "terminal",
-				log: logIfNeeded(),
-			};
-			if (opts.enableDiagnostics) {
-				getDiagnosticsCollector().endGame(result.winner, result.reason);
-			}
-			return result;
+			return completeMatch(turn - 1, terminal.winner ?? null, "terminal");
 		}
 
 		const legalMoves = Engine.listLegalMoves(state);
@@ -153,18 +178,7 @@ async function playMatchLegacy(opts: {
 				if (!opts.autofixIllegal) {
 					if (opts.verbose)
 						console.error(`[turn ${turn}] bot ${bot.name} crashed (batch)`, e);
-					const result: MatchResult = {
-						seed: opts.seed,
-						turns: turn - 1,
-						winner: null,
-						illegalMoves,
-						reason: "illegal",
-						log: logIfNeeded(),
-					};
-					if (opts.enableDiagnostics) {
-						getDiagnosticsCollector().endGame(result.winner, result.reason);
-					}
-					return result;
+					return failIllegal(turn);
 				}
 				turnMoves = [{ action: "end_turn" }];
 			}
@@ -177,10 +191,7 @@ async function playMatchLegacy(opts: {
 				const currentLegal = Engine.listLegalMoves(state);
 				if (currentLegal.length === 0) break;
 
-				const isLegal = currentLegal.some(
-					(m) =>
-						safeJson(stripReasoning(m)) === safeJson(stripReasoning(batchMove)),
-				);
+				const isLegal = isMoveLegal(batchMove, currentLegal);
 
 				if (!isLegal) {
 					illegalMoves++;
@@ -190,18 +201,7 @@ async function playMatchLegacy(opts: {
 								`[turn ${turn}] bot ${bot.name} chose illegal batch move: ${short(batchMove)}`,
 							);
 						}
-						const result: MatchResult = {
-							seed: opts.seed,
-							turns: turn - 1,
-							winner: null,
-							illegalMoves,
-							reason: "illegal",
-							log: logIfNeeded(),
-						};
-						if (opts.enableDiagnostics) {
-							getDiagnosticsCollector().endGame(result.winner, result.reason);
-						}
-						return result;
+						return failIllegal(turn);
 					}
 					if (opts.verbose) {
 						console.warn(
@@ -212,8 +212,8 @@ async function playMatchLegacy(opts: {
 				}
 
 				const engineBatchMove = stripReasoning(batchMove);
-				const result = Engine.applyMove(state, engineBatchMove);
-				if (!result.ok) {
+				const applyResult = Engine.applyMove(state, engineBatchMove);
+				if (!applyResult.ok) {
 					illegalMoves++;
 					if (!opts.autofixIllegal) {
 						if (opts.verbose) {
@@ -221,21 +221,7 @@ async function playMatchLegacy(opts: {
 								`[turn ${turn}] bot ${bot.name} produced invalid batch move application: ${short(engineBatchMove)}`,
 							);
 						}
-						const terminal: MatchResult = {
-							seed: opts.seed,
-							turns: turn - 1,
-							winner: null,
-							illegalMoves,
-							reason: "illegal",
-							log: logIfNeeded(),
-						};
-						if (opts.enableDiagnostics) {
-							getDiagnosticsCollector().endGame(
-								terminal.winner,
-								terminal.reason,
-							);
-						}
-						return terminal;
+						return failIllegal(turn);
 					}
 					if (opts.verbose) {
 						console.warn(
@@ -244,9 +230,9 @@ async function playMatchLegacy(opts: {
 					}
 					continue;
 				}
-				engineEvents.push(...result.engineEvents);
+				engineEvents.push(...applyResult.engineEvents);
 				moves.push(engineBatchMove);
-				state = result.state;
+				state = applyResult.state;
 
 				if (opts.verbose) {
 					console.log(`[turn ${turn}] ${bot.name} -> ${short(batchMove)}`);
@@ -278,44 +264,20 @@ async function playMatchLegacy(opts: {
 			if (!opts.autofixIllegal) {
 				if (opts.verbose)
 					console.error(`[turn ${turn}] bot ${bot.name} crashed`, e);
-				const result: MatchResult = {
-					seed: opts.seed,
-					turns: turn - 1,
-					winner: null,
-					illegalMoves,
-					reason: "illegal",
-					log: logIfNeeded(),
-				};
-				if (opts.enableDiagnostics) {
-					getDiagnosticsCollector().endGame(result.winner, result.reason);
-				}
-				return result;
+				return failIllegal(turn);
 			}
 			move = legalMoves[0] as Move;
 			if (opts.verbose)
 				console.error(`[turn ${turn}] bot ${bot.name} crashed; fallback`, e);
 		}
 
-		const isLegal = legalMoves.some(
-			(m) => safeJson(stripReasoning(m)) === safeJson(stripReasoning(move)),
-		);
+		const isLegal = isMoveLegal(move, legalMoves);
 		if (!isLegal) {
 			illegalMoves++;
 			if (!opts.autofixIllegal) {
 				if (opts.verbose)
 					console.warn(`[turn ${turn}] bot ${bot.name} chose illegal move`);
-				const result: MatchResult = {
-					seed: opts.seed,
-					turns: turn - 1,
-					winner: null,
-					illegalMoves,
-					reason: "illegal",
-					log: logIfNeeded(),
-				};
-				if (opts.enableDiagnostics) {
-					getDiagnosticsCollector().endGame(result.winner, result.reason);
-				}
-				return result;
+				return failIllegal(turn);
 			}
 			if (opts.verbose)
 				console.warn(
@@ -325,24 +287,13 @@ async function playMatchLegacy(opts: {
 		}
 
 		const engineMove = stripReasoning(move);
-		const result = Engine.applyMove(state, engineMove);
-		engineEvents.push(...result.engineEvents);
+		const applyResult = Engine.applyMove(state, engineMove);
+		engineEvents.push(...applyResult.engineEvents);
 		moves.push(engineMove);
-		if (!result.ok) {
+		if (!applyResult.ok) {
 			illegalMoves++;
 			if (!opts.autofixIllegal) {
-				const result: MatchResult = {
-					seed: opts.seed,
-					turns: turn - 1,
-					winner: null,
-					illegalMoves,
-					reason: "illegal",
-					log: logIfNeeded(),
-				};
-				if (opts.enableDiagnostics) {
-					getDiagnosticsCollector().endGame(result.winner, result.reason);
-				}
-				return result;
+				return failIllegal(turn);
 			}
 			if (opts.verbose)
 				console.warn(`[turn ${turn}] engine rejected move; forcing legal`);
@@ -355,21 +306,10 @@ async function playMatchLegacy(opts: {
 			if (fallbackResult.ok) {
 				state = fallbackResult.state;
 			} else {
-				const result: MatchResult = {
-					seed: opts.seed,
-					turns: turn - 1,
-					winner: null,
-					illegalMoves,
-					reason: "illegal",
-					log: logIfNeeded(),
-				};
-				if (opts.enableDiagnostics) {
-					getDiagnosticsCollector().endGame(result.winner, result.reason);
-				}
-				return result;
+				return failIllegal(turn);
 			}
 		} else {
-			state = result.state;
+			state = applyResult.state;
 		}
 
 		// Log turn diagnostics
@@ -392,21 +332,7 @@ async function playMatchLegacy(opts: {
 		}
 	}
 
-	const result: MatchResult = {
-		seed: opts.seed,
-		turns: opts.maxTurns,
-		winner: Engine.winner(state),
-		illegalMoves,
-		reason: "maxTurns",
-		log: logIfNeeded(),
-	};
-
-	// End game diagnostics
-	if (opts.enableDiagnostics) {
-		getDiagnosticsCollector().endGame(result.winner, result.reason);
-	}
-
-	return result;
+	return completeMatch(opts.maxTurns, Engine.winner(state), "maxTurns");
 }
 
 export function replayMatch(log: MatchLog): {

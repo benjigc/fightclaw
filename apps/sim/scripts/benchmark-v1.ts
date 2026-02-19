@@ -36,6 +36,36 @@ interface RunPolicy {
 	continueOnError?: boolean;
 }
 
+interface MassCommandBaseOptions {
+	games: number;
+	parallel: number;
+	output: string;
+	maxTurns: number;
+	scenario: string;
+	bot1: string;
+	bot2: string;
+}
+
+interface ApiLlmOptions {
+	model: string;
+	parallelCalls: number;
+	timeoutMs: number;
+	maxRetries: number;
+	retryBaseMs: number;
+	maxTokens: number;
+}
+
+interface ApiLaneCommandOptions {
+	scenario: Scenario;
+	bot1: Strategy;
+	bot2: Strategy;
+	gamesPerMatchup: number;
+	output: string;
+	maxTurns: number;
+	seed: number;
+	llm: ApiLlmOptions;
+}
+
 const scenarios: Scenario[] = [
 	"midfield",
 	"melee",
@@ -53,10 +83,28 @@ const mirroredPairs: Array<[Strategy, Strategy]> = [
 	["defensive", "defensive"],
 ];
 
+const SIM_MASS_COMMAND_PREFIX = [
+	"-C",
+	"apps/sim",
+	"exec",
+	"tsx",
+	"src/cli.ts",
+	"mass",
+] as const;
+
 function parseArg(name: string): string | undefined {
 	const idx = process.argv.indexOf(name);
 	if (idx < 0) return undefined;
 	return process.argv[idx + 1];
+}
+
+function parseStringArg(name: string, fallback: string): string {
+	return parseArg(name) ?? fallback;
+}
+
+function parseIntArg(name: string, fallback: number): number {
+	const parsed = Number.parseInt(parseStringArg(name, String(fallback)), 10);
+	return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function hasFlag(name: string): boolean {
@@ -74,6 +122,96 @@ function parseBoolArg(name: string, fallback: boolean): boolean {
 		return false;
 	}
 	return fallback;
+}
+
+function createMassCommandBaseArgs(options: MassCommandBaseOptions): string[] {
+	return [
+		...SIM_MASS_COMMAND_PREFIX,
+		"--games",
+		String(options.games),
+		"--parallel",
+		String(options.parallel),
+		"--output",
+		options.output,
+		"--harness",
+		"boardgameio",
+		"--boardColumns",
+		"17",
+		"--turnLimit",
+		"40",
+		"--actionsPerTurn",
+		"7",
+		"--maxTurns",
+		String(options.maxTurns),
+		"--scenario",
+		options.scenario,
+		"--bot1",
+		options.bot1,
+		"--bot2",
+		options.bot2,
+	];
+}
+
+function createFastLaneCommandArgs(
+	matchup: Matchup,
+	gamesPerMatchup: number,
+	maxTurns: number,
+	output: string,
+): string[] {
+	return [
+		...createMassCommandBaseArgs({
+			games: gamesPerMatchup,
+			parallel: 4,
+			output,
+			maxTurns,
+			scenario: matchup.scenario,
+			bot1: "mockllm",
+			bot2: "mockllm",
+		}),
+		"--strategy1",
+		matchup.bot1,
+		"--strategy2",
+		matchup.bot2,
+		"--seed",
+		String(matchup.seed),
+		"--quiet",
+	];
+}
+
+function createApiLaneCommandArgs(options: ApiLaneCommandOptions): string[] {
+	const { llm } = options;
+	return [
+		...createMassCommandBaseArgs({
+			games: options.gamesPerMatchup,
+			parallel: 1,
+			output: options.output,
+			maxTurns: options.maxTurns,
+			scenario: options.scenario,
+			bot1: "llm",
+			bot2: "llm",
+		}),
+		"--model1",
+		llm.model,
+		"--model2",
+		llm.model,
+		"--strategy1",
+		options.bot1,
+		"--strategy2",
+		options.bot2,
+		"--llmParallelCalls",
+		String(Math.max(1, llm.parallelCalls)),
+		"--llmTimeoutMs",
+		String(Math.max(1, llm.timeoutMs)),
+		"--llmMaxRetries",
+		String(Math.max(0, llm.maxRetries)),
+		"--llmRetryBaseMs",
+		String(Math.max(1, llm.retryBaseMs)),
+		"--llmMaxTokens",
+		String(Math.max(64, llm.maxTokens)),
+		"--seed",
+		String(options.seed),
+		"--quiet",
+	];
 }
 
 async function runCmd(
@@ -255,49 +393,22 @@ async function main() {
 	const withApi = hasFlag("--withApi");
 	const skipFastLane = hasFlag("--skipFastLane") || hasFlag("--apiOnly");
 	const resume = parseBoolArg("--resume", true);
-	const gamesPerMatchup = Number.parseInt(
-		parseArg("--gamesPerMatchup") ?? "4",
-		10,
-	);
-	const apiGamesPerMatchup = Number.parseInt(
-		parseArg("--apiGamesPerMatchup") ?? "1",
-		10,
-	);
-	const maxTurns = Number.parseInt(parseArg("--maxTurns") ?? "200", 10);
-	const baseSeed = Number.parseInt(parseArg("--seed") ?? "70000", 10);
-	const model = parseArg("--model") ?? "openai/gpt-4o-mini";
-	const apiMaxTurns = Number.parseInt(parseArg("--apiMaxTurns") ?? "120", 10);
-	const apiLlmParallelCalls = Number.parseInt(
-		parseArg("--apiLlmParallelCalls") ?? "1",
-		10,
-	);
-	const apiLlmTimeoutMs = Number.parseInt(
-		parseArg("--apiLlmTimeoutMs") ?? "20000",
-		10,
-	);
-	const apiLlmMaxRetries = Number.parseInt(
-		parseArg("--apiLlmMaxRetries") ?? "1",
-		10,
-	);
-	const apiLlmRetryBaseMs = Number.parseInt(
-		parseArg("--apiLlmRetryBaseMs") ?? "600",
-		10,
-	);
-	const apiLlmMaxTokens = Number.parseInt(
-		parseArg("--apiLlmMaxTokens") ?? "280",
-		10,
-	);
-	const apiCommandTimeoutMs = Number.parseInt(
-		parseArg("--apiCommandTimeoutMs") ?? "240000",
-		10,
-	);
-	const apiCommandRetries = Number.parseInt(
-		parseArg("--apiCommandRetries") ?? "1",
-		10,
-	);
+	const gamesPerMatchup = parseIntArg("--gamesPerMatchup", 4);
+	const apiGamesPerMatchup = parseIntArg("--apiGamesPerMatchup", 1);
+	const maxTurns = parseIntArg("--maxTurns", 200);
+	const baseSeed = parseIntArg("--seed", 70000);
+	const model = parseStringArg("--model", "openai/gpt-4o-mini");
+	const apiMaxTurns = parseIntArg("--apiMaxTurns", 120);
+	const apiLlmParallelCalls = parseIntArg("--apiLlmParallelCalls", 1);
+	const apiLlmTimeoutMs = parseIntArg("--apiLlmTimeoutMs", 20000);
+	const apiLlmMaxRetries = parseIntArg("--apiLlmMaxRetries", 1);
+	const apiLlmRetryBaseMs = parseIntArg("--apiLlmRetryBaseMs", 600);
+	const apiLlmMaxTokens = parseIntArg("--apiLlmMaxTokens", 280);
+	const apiCommandTimeoutMs = parseIntArg("--apiCommandTimeoutMs", 240000);
+	const apiCommandRetries = parseIntArg("--apiCommandRetries", 1);
 	const apiContinueOnError = parseArg("--apiContinueOnError") !== "false";
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-	const runName = parseArg("--name") ?? `benchmark_v1_${timestamp}`;
+	const runName = parseStringArg("--name", `benchmark_v1_${timestamp}`);
 	const outputBaseInSim = path.join("results", runName);
 	const outputBaseAbs = path.join(simDir, outputBaseInSim);
 
@@ -329,43 +440,7 @@ async function main() {
 			);
 			await runCmd(
 				repoRoot,
-				[
-					"-C",
-					"apps/sim",
-					"exec",
-					"tsx",
-					"src/cli.ts",
-					"mass",
-					"--games",
-					String(gamesPerMatchup),
-					"--parallel",
-					"4",
-					"--output",
-					output,
-					"--harness",
-					"boardgameio",
-					"--boardColumns",
-					"17",
-					"--turnLimit",
-					"40",
-					"--actionsPerTurn",
-					"7",
-					"--maxTurns",
-					String(maxTurns),
-					"--scenario",
-					matchup.scenario,
-					"--bot1",
-					"mockllm",
-					"--bot2",
-					"mockllm",
-					"--strategy1",
-					matchup.bot1,
-					"--strategy2",
-					matchup.bot2,
-					"--seed",
-					String(matchup.seed),
-					"--quiet",
-				],
+				createFastLaneCommandArgs(matchup, gamesPerMatchup, maxTurns, output),
 				dryRun,
 			);
 		}
@@ -402,57 +477,23 @@ async function main() {
 				}
 				const ok = await runCmd(
 					repoRoot,
-					[
-						"-C",
-						"apps/sim",
-						"exec",
-						"tsx",
-						"src/cli.ts",
-						"mass",
-						"--games",
-						String(apiGamesPerMatchup),
-						"--parallel",
-						"1",
-						"--output",
-						output,
-						"--harness",
-						"boardgameio",
-						"--boardColumns",
-						"17",
-						"--turnLimit",
-						"40",
-						"--actionsPerTurn",
-						"7",
-						"--maxTurns",
-						String(apiMaxTurns),
-						"--scenario",
+					createApiLaneCommandArgs({
 						scenario,
-						"--bot1",
-						"llm",
-						"--bot2",
-						"llm",
-						"--model1",
-						model,
-						"--model2",
-						model,
-						"--strategy1",
 						bot1,
-						"--strategy2",
 						bot2,
-						"--llmParallelCalls",
-						String(Math.max(1, apiLlmParallelCalls)),
-						"--llmTimeoutMs",
-						String(Math.max(1, apiLlmTimeoutMs)),
-						"--llmMaxRetries",
-						String(Math.max(0, apiLlmMaxRetries)),
-						"--llmRetryBaseMs",
-						String(Math.max(1, apiLlmRetryBaseMs)),
-						"--llmMaxTokens",
-						String(Math.max(64, apiLlmMaxTokens)),
-						"--seed",
-						String(apiSeed),
-						"--quiet",
-					],
+						gamesPerMatchup: apiGamesPerMatchup,
+						output,
+						maxTurns: apiMaxTurns,
+						seed: apiSeed,
+						llm: {
+							model,
+							parallelCalls: apiLlmParallelCalls,
+							timeoutMs: apiLlmTimeoutMs,
+							maxRetries: apiLlmMaxRetries,
+							retryBaseMs: apiLlmRetryBaseMs,
+							maxTokens: apiLlmMaxTokens,
+						},
+					}),
 					dryRun,
 					{
 						timeoutMs: Math.max(0, apiCommandTimeoutMs),

@@ -7,8 +7,10 @@
 
 import {
 	applyMove,
+	bindEngineConfig,
 	createInitialState,
 	currentPlayer,
+	getEngineConfig,
 	isTerminal,
 	listLegalMoves,
 	winner,
@@ -42,5 +44,16 @@ export const Engine = {
 
 	applyMove(state: MatchState, move: Move) {
 		return applyMove(state, move);
+	},
+
+	bindEngineConfig(
+		state: MatchState,
+		configInput?: EngineConfigInput,
+	): MatchState {
+		return bindEngineConfig(state, configInput);
+	},
+
+	getEngineConfig(state: MatchState): EngineConfigInput {
+		return getEngineConfig(state);
 	},
 };

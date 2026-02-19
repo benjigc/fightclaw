@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyMove,
+	bindEngineConfig,
 	createInitialState,
 	DEFAULT_CONFIG,
 	type EngineEvent,
+	getEngineConfig,
 	type HexId,
 	listLegalMoves,
 	type MatchState,
@@ -15,6 +17,10 @@ import {
 
 const players = ["agent-a", "agent-b"] as const;
 
+function cloneWithConfig(state: MatchState): MatchState {
+	return bindEngineConfig(structuredClone(state), getEngineConfig(state));
+}
+
 function hexIndex(id: HexId): number {
 	const { row, col } = parseHexId(id);
 	return row * 21 + col;
@@ -22,7 +28,7 @@ function hexIndex(id: HexId): number {
 
 /** Remove all units from a state */
 function clearUnits(state: MatchState): MatchState {
-	const s = structuredClone(state);
+	const s = cloneWithConfig(state);
 	s.players.A.units = [];
 	s.players.B.units = [];
 	for (let i = 0; i < s.board.length; i++) {
@@ -41,7 +47,7 @@ function addUnitToState(
 	position: HexId,
 	opts?: Partial<Unit>,
 ): MatchState {
-	const s = structuredClone(state);
+	const s = cloneWithConfig(state);
 	const hp = DEFAULT_CONFIG.unitStats[type].hp;
 	const unit: Unit = {
 		id,
@@ -59,11 +65,11 @@ function addUnitToState(
 	};
 	s.players[owner].units.push(unit);
 	const idx = hexIndex(position);
-	if (s.board[idx]) {
-		// biome-ignore lint/style/noNonNullAssertion: index checked on prior line
+	const boardHex = s.board[idx];
+	if (boardHex) {
 		s.board[idx] = {
-			...s.board[idx]!,
-			unitIds: [...s.board[idx]!.unitIds, id],
+			...boardHex,
+			unitIds: [...boardHex.unitIds, id],
 		};
 	}
 	return s;
@@ -235,6 +241,50 @@ describe("v2 engine - War of Attrition", () => {
 		expect(JSON.stringify(a.events)).toBe(JSON.stringify(b.events));
 	});
 
+	test("engine config stays isolated per state across mixed matches", () => {
+		const stateA = createInitialState(
+			11,
+			{ actionsPerTurn: 7, boardColumns: 17 },
+			[...players],
+		);
+		const stateB = createInitialState(
+			22,
+			{ actionsPerTurn: 3, boardColumns: 21 },
+			[...players],
+		);
+
+		const resultA = applyMove(stateA, { action: "end_turn" });
+		expect(resultA.ok).toBe(true);
+		if (!resultA.ok) return;
+
+		const resultB = applyMove(stateB, { action: "end_turn" });
+		expect(resultB.ok).toBe(true);
+		if (!resultB.ok) return;
+
+		expect(resultA.state.actionsRemaining).toBe(7);
+		expect(resultB.state.actionsRemaining).toBe(3);
+		expect(resultA.state.board.length).toBe(9 * 17);
+		expect(resultB.state.board.length).toBe(9 * 21);
+	});
+
+	test("bindEngineConfig preserves replay config after state deserialization", () => {
+		const configured = createInitialState(
+			7,
+			{ actionsPerTurn: 7, boardColumns: 17 },
+			[...players],
+		);
+		const rebound = bindEngineConfig(
+			structuredClone(configured),
+			getEngineConfig(configured),
+		);
+
+		const result = applyMove(rebound, { action: "end_turn" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.state.actionsRemaining).toBe(7);
+		expect(result.state.board.length).toBe(9 * 17);
+	});
+
 	// ---- Move validation ----
 
 	test("illegal move rejection reason is stable", () => {
@@ -377,15 +427,17 @@ describe("v2 engine - War of Attrition", () => {
 		// Move A-1 off B2
 		// biome-ignore lint/style/noNonNullAssertion: unit known to exist
 		const a1 = state.players.A.units.find((u) => u.id === "A-1")!;
-		// biome-ignore lint/style/noNonNullAssertion: valid board index
+		const previousHex = state.board[hexIndex(a1.position)];
+		if (!previousHex) throw new Error("Expected source hex to exist");
 		state.board[hexIndex(a1.position)] = {
-			...state.board[hexIndex(a1.position)]!,
+			...previousHex,
 			unitIds: [],
 		};
 		a1.position = "B4";
-		// biome-ignore lint/style/noNonNullAssertion: valid board index
+		const nextHex = state.board[hexIndex("B4")];
+		if (!nextHex) throw new Error("Expected destination hex to exist");
 		state.board[hexIndex("B4")] = {
-			...state.board[hexIndex("B4")]!,
+			...nextHex,
 			unitIds: ["A-1"],
 		};
 
@@ -520,17 +572,17 @@ describe("v2 engine - War of Attrition", () => {
 			| AttackEvent
 			| undefined;
 		expect(atkEvent).toBeTruthy();
-		expect(atkEvent!.attackPower).toBe(6); // 4 base + 2 attacker bonus
-		expect(atkEvent!.defensePower).toBe(4); // 4 base + 0 terrain
-		expect(atkEvent!.outcome.damageDealt).toBe(2);
-		expect(atkEvent!.outcome.damageTaken).toBe(0);
+		expect(atkEvent?.attackPower).toBe(6); // 4 base + 2 attacker bonus
+		expect(atkEvent?.defensePower).toBe(4); // 4 base + 0 terrain
+		expect(atkEvent?.outcome.damageDealt).toBe(2);
+		expect(atkEvent?.outcome.damageTaken).toBe(0);
 		// Infantry has 3 HP, takes 1 → survives
-		expect(atkEvent!.outcome.defenderSurvivors.length).toBe(1);
-		expect(atkEvent!.outcome.defenderCasualties.length).toBe(0);
+		expect(atkEvent?.outcome.defenderSurvivors.length).toBe(1);
+		expect(atkEvent?.outcome.defenderCasualties.length).toBe(0);
 		// Attacker survives
-		expect(atkEvent!.outcome.attackerSurvivors.length).toBe(1);
+		expect(atkEvent?.outcome.attackerSurvivors.length).toBe(1);
 		// No capture because defender alive
-		expect(atkEvent!.outcome.captured).toBe(false);
+		expect(atkEvent?.outcome.captured).toBe(false);
 	});
 
 	test("HP-based combat: repeated attacks kill a unit", () => {
@@ -552,9 +604,9 @@ describe("v2 engine - War of Attrition", () => {
 		const atkEvent = result.engineEvents.find((e) => e.type === "attack") as
 			| AttackEvent
 			| undefined;
-		expect(atkEvent!.outcome.defenderCasualties.length).toBe(1);
+		expect(atkEvent?.outcome.defenderCasualties.length).toBe(1);
 		// Melee capture: attacker moves in
-		expect(atkEvent!.outcome.captured).toBe(true);
+		expect(atkEvent?.outcome.captured).toBe(true);
 	});
 
 	test("HP-based combat: weaker attacker still deals minimum 1 damage", () => {
@@ -592,11 +644,11 @@ describe("v2 engine - War of Attrition", () => {
 			| undefined;
 		expect(atkEvent).toBeTruthy();
 		// ATK = 2 + 2 = 4, DEF = 4 + 1 (hills) = 5
-		expect(atkEvent!.attackPower).toBe(4);
-		expect(atkEvent!.defensePower).toBe(5);
+		expect(atkEvent?.attackPower).toBe(4);
+		expect(atkEvent?.defensePower).toBe(5);
 		// ATK < DEF: minimum 1 damage to defender, 1 counterattack to attacker
-		expect(atkEvent!.outcome.damageDealt).toBe(1);
-		expect(atkEvent!.outcome.damageTaken).toBe(1);
+		expect(atkEvent?.outcome.damageDealt).toBe(1);
+		expect(atkEvent?.outcome.damageTaken).toBe(1);
 	});
 
 	test("HP-based combat: equal ATK/DEF deals 1 damage to defender, 0 to attacker", () => {
@@ -619,10 +671,10 @@ describe("v2 engine - War of Attrition", () => {
 		const atkEvent = result.engineEvents.find((e) => e.type === "attack") as
 			| AttackEvent
 			| undefined;
-		expect(atkEvent!.attackPower).toBe(4);
-		expect(atkEvent!.defensePower).toBe(3);
-		expect(atkEvent!.outcome.damageDealt).toBe(1);
-		expect(atkEvent!.outcome.damageTaken).toBe(0);
+		expect(atkEvent?.attackPower).toBe(4);
+		expect(atkEvent?.defensePower).toBe(3);
+		expect(atkEvent?.outcome.damageDealt).toBe(1);
+		expect(atkEvent?.outcome.damageTaken).toBe(0);
 	});
 
 	test("ranged attack: no counterattack when ATK < DEF", () => {
@@ -644,9 +696,9 @@ describe("v2 engine - War of Attrition", () => {
 		const atkEvent = result.engineEvents.find((e) => e.type === "attack") as
 			| AttackEvent
 			| undefined;
-		expect(atkEvent!.outcome.damageTaken).toBe(0); // ranged, no counterattack
-		expect(atkEvent!.outcome.damageDealt).toBe(1); // minimum 1
-		expect(atkEvent!.outcome.captured).toBe(false); // ranged never captures
+		expect(atkEvent?.outcome.damageTaken).toBe(0); // ranged, no counterattack
+		expect(atkEvent?.outcome.damageDealt).toBe(1); // minimum 1
+		expect(atkEvent?.outcome.captured).toBe(false); // ranged never captures
 	});
 
 	// ---- VP for kills ----
@@ -879,7 +931,7 @@ describe("v2 engine - War of Attrition", () => {
 		expect(atkEvent?.defensePower).toBe(0);
 		expect(atkEvent?.abilities).toContain("archer_melee_vulnerability");
 		// ATK 2 + 1 = 3 > 0 → damage = 3, archer HP = 2 → dies
-		expect(atkEvent!.outcome.defenderCasualties.length).toBe(1);
+		expect(atkEvent?.outcome.defenderCasualties.length).toBe(1);
 	});
 
 	// ---- Archer LoS ----
@@ -1166,7 +1218,7 @@ describe("v2 engine - War of Attrition", () => {
 		const atkEvent = result.engineEvents.find((e) => e.type === "attack") as
 			| AttackEvent
 			| undefined;
-		expect(atkEvent!.outcome.captured).toBe(false);
+		expect(atkEvent?.outcome.captured).toBe(false);
 		// Archer should stay at E9
 		const archer = result.state.players.A.units.find((u) => u.id === "A-1");
 		expect(archer?.position).toBe("E9");
@@ -1274,8 +1326,11 @@ describe("v2 engine - War of Attrition", () => {
 		state = structuredClone(state);
 		const b9Idx = hexIndex("B9");
 		const c8Idx = hexIndex("C8");
-		state.board[b9Idx] = { ...state.board[b9Idx]!, controlledBy: "A" };
-		state.board[c8Idx] = { ...state.board[c8Idx]!, controlledBy: "A" };
+		const b9Hex = state.board[b9Idx];
+		const c8Hex = state.board[c8Idx];
+		if (!b9Hex || !c8Hex) throw new Error("Expected economy hexes to exist");
+		state.board[b9Idx] = { ...b9Hex, controlledBy: "A" };
+		state.board[c8Idx] = { ...c8Hex, controlledBy: "A" };
 
 		const startingGold = state.players.A.gold;
 		const startingWood = state.players.A.wood;
@@ -1300,9 +1355,11 @@ describe("v2 engine - War of Attrition", () => {
 		const removed = state.players.B.units.splice(0, 2);
 		for (const unit of removed) {
 			const idx = hexIndex(unit.position);
+			const hex = state.board[idx];
+			if (!hex) throw new Error("Expected unit hex to exist");
 			state.board[idx] = {
-				...state.board[idx]!,
-				unitIds: state.board[idx]!.unitIds.filter((id) => id !== unit.id),
+				...hex,
+				unitIds: hex.unitIds.filter((id) => id !== unit.id),
 			};
 		}
 
@@ -1371,8 +1428,8 @@ describe("v2 engine - War of Attrition", () => {
 			| AttackEvent
 			| undefined;
 		// 2 infantry: base ATK 2 + 2 attacker bonus + 1 stack bonus = 5
-		expect(atkEvent!.attackPower).toBe(5);
-		expect(atkEvent!.abilities).toContain("stack_atk_+1");
+		expect(atkEvent?.attackPower).toBe(5);
+		expect(atkEvent?.abilities).toContain("stack_atk_+1");
 	});
 
 	test("moving a stacked unit moves entire stack", () => {

@@ -165,6 +165,71 @@ const mirroredPairs: Array<[Strategy, Strategy]> = [
 	["defensive", "defensive"],
 ];
 
+const BOARD_COLUMNS = 17;
+const TURN_LIMIT = 40;
+const ACTIONS_PER_TURN = 7;
+
+function formatMatchupName(
+	scenario: Scenario,
+	bot1: Strategy,
+	bot2: Strategy,
+): string {
+	return `${scenario}__${bot1}_vs_${bot2}`;
+}
+
+function createEmptyAggregate(): Aggregate {
+	return {
+		games: 0,
+		draws: 0,
+		illegalMoves: 0,
+		avgTurns: 0,
+		byScenario: {},
+	};
+}
+
+function createEmptyApiTelemetryTotals(): ApiTelemetryTotals {
+	return {
+		completed: 0,
+		skipped: 0,
+		failed: 0,
+	};
+}
+
+function buildMassSharedArgs(params: {
+	games: number;
+	parallel: number;
+	output: string;
+	maxTurns: number;
+	scenario: Scenario;
+}): string[] {
+	return [
+		"--games",
+		String(params.games),
+		"--parallel",
+		String(params.parallel),
+		"--output",
+		params.output,
+		"--artifactDir",
+		path.join(params.output, "artifacts"),
+		"--storeFullPrompt",
+		"true",
+		"--storeFullOutput",
+		"true",
+		"--harness",
+		"boardgameio",
+		"--boardColumns",
+		String(BOARD_COLUMNS),
+		"--turnLimit",
+		String(TURN_LIMIT),
+		"--actionsPerTurn",
+		String(ACTIONS_PER_TURN),
+		"--maxTurns",
+		String(params.maxTurns),
+		"--scenario",
+		params.scenario,
+	];
+}
+
 function parseArg(name: string): string | undefined {
 	const idx = process.argv.indexOf(name);
 	if (idx < 0) return undefined;
@@ -477,11 +542,21 @@ function aggregateApiLaneMetrics(
 export function countApiTelemetryTotals(
 	telemetry: ReadonlyArray<Pick<ApiMatchTelemetry, "status">>,
 ): ApiTelemetryTotals {
-	return {
-		completed: telemetry.filter((entry) => entry.status === "ok").length,
-		skipped: telemetry.filter((entry) => entry.status === "skipped").length,
-		failed: telemetry.filter((entry) => entry.status === "failed").length,
-	};
+	const totals = createEmptyApiTelemetryTotals();
+	for (const entry of telemetry) {
+		switch (entry.status) {
+			case "ok":
+				totals.completed += 1;
+				break;
+			case "skipped":
+				totals.skipped += 1;
+				break;
+			case "failed":
+				totals.failed += 1;
+				break;
+		}
+	}
+	return totals;
 }
 
 export function collectSuccessfulApiMatchups(
@@ -868,7 +943,7 @@ async function main() {
 		for (const matchup of matchups) {
 			const output = path.join(
 				fastLaneDirInSim,
-				`${matchup.scenario}__${matchup.bot1}_vs_${matchup.bot2}`,
+				formatMatchupName(matchup.scenario, matchup.bot1, matchup.bot2),
 			);
 			if (
 				shouldSkipCompletedMatchup(
@@ -889,30 +964,13 @@ async function main() {
 					"tsx",
 					"src/cli.ts",
 					"mass",
-					"--games",
-					String(gamesPerMatchup),
-					"--parallel",
-					"4",
-					"--output",
-					output,
-					"--artifactDir",
-					path.join(output, "artifacts"),
-					"--storeFullPrompt",
-					"true",
-					"--storeFullOutput",
-					"true",
-					"--harness",
-					"boardgameio",
-					"--boardColumns",
-					"17",
-					"--turnLimit",
-					"40",
-					"--actionsPerTurn",
-					"7",
-					"--maxTurns",
-					String(maxTurns),
-					"--scenario",
-					matchup.scenario,
+					...buildMassSharedArgs({
+						games: gamesPerMatchup,
+						parallel: 4,
+						output,
+						maxTurns,
+						scenario: matchup.scenario,
+					}),
 					"--bot1",
 					"mockllm",
 					"--bot2",
@@ -952,11 +1010,8 @@ async function main() {
 		}> = [];
 		for (const scenario of scenarios) {
 			for (const [bot1, bot2] of apiPairs) {
-				const output = path.join(
-					apiLaneDirInSim,
-					`${scenario}__${bot1}_vs_${bot2}`,
-				);
-				const matchup = `${scenario}__${bot1}_vs_${bot2}`;
+				const matchup = formatMatchupName(scenario, bot1, bot2);
+				const output = path.join(apiLaneDirInSim, matchup);
 				if (
 					shouldSkipCompletedMatchup(
 						path.join(simDir, output),
@@ -993,30 +1048,13 @@ async function main() {
 					"tsx",
 					"src/cli.ts",
 					"mass",
-					"--games",
-					String(apiGamesPerMatchup),
-					"--parallel",
-					"1",
-					"--output",
-					task.output,
-					"--artifactDir",
-					path.join(task.output, "artifacts"),
-					"--storeFullPrompt",
-					"true",
-					"--storeFullOutput",
-					"true",
-					"--harness",
-					"boardgameio",
-					"--boardColumns",
-					"17",
-					"--turnLimit",
-					"40",
-					"--actionsPerTurn",
-					"7",
-					"--maxTurns",
-					String(apiMaxTurns),
-					"--scenario",
-					task.scenario,
+					...buildMassSharedArgs({
+						games: apiGamesPerMatchup,
+						parallel: 1,
+						output: task.output,
+						maxTurns: apiMaxTurns,
+						scenario: task.scenario,
+					}),
 					"--bot1",
 					"llm",
 					"--bot2",
@@ -1322,21 +1360,9 @@ async function main() {
 		? buildApiLaneIntegritySummary({
 				telemetry: apiMatchTelemetry,
 				apiGamesPerMatchup,
-				runScopedAggregate: apiLaneAggregateRunScoped ?? {
-					games: 0,
-					draws: 0,
-					illegalMoves: 0,
-					avgTurns: 0,
-					byScenario: {},
-				},
+				runScopedAggregate: apiLaneAggregateRunScoped ?? createEmptyAggregate(),
 				runScopedMetrics: apiLaneMetricsRunScoped ?? summarizeApiGameRows([]),
-				rawAggregate: apiLaneAggregateRaw ?? {
-					games: 0,
-					draws: 0,
-					illegalMoves: 0,
-					avgTurns: 0,
-					byScenario: {},
-				},
+				rawAggregate: apiLaneAggregateRaw ?? createEmptyAggregate(),
 				rawMetrics: apiLaneMetricsRaw ?? summarizeApiGameRows([]),
 			})
 		: null;
@@ -1382,11 +1408,7 @@ async function main() {
 	const apiGraduation = withApi
 		? buildApiGraduationSummary({
 				lane: apiGraduationLane,
-				telemetryTotals: apiTelemetryTotals ?? {
-					completed: 0,
-					skipped: 0,
-					failed: 0,
-				},
+				telemetryTotals: apiTelemetryTotals ?? createEmptyApiTelemetryTotals(),
 				illegalMoves: apiLaneAggregate?.illegalMoves ?? 0,
 				maxTurnsEndingRate: apiLaneMetrics?.maxTurnsEndingRate ?? 0,
 				p95WallClockPerMatchMs: apiDurationStats.p95,
@@ -1400,9 +1422,9 @@ async function main() {
 		version: "benchmark_v2",
 		timestamp: summaryTimestamp,
 		config: {
-			boardColumns: 17,
-			turnLimit: 40,
-			actionsPerTurn: 7,
+			boardColumns: BOARD_COLUMNS,
+			turnLimit: TURN_LIMIT,
+			actionsPerTurn: ACTIONS_PER_TURN,
 			maxTurns,
 			gamesPerMatchup,
 			apiGamesPerMatchup,
@@ -1471,11 +1493,7 @@ async function main() {
 					matchups: [...apiMatchTelemetry].sort((a, b) =>
 						a.matchup.localeCompare(b.matchup),
 					),
-					totals: apiTelemetryTotals ?? {
-						completed: 0,
-						skipped: 0,
-						failed: 0,
-					},
+					totals: apiTelemetryTotals ?? createEmptyApiTelemetryTotals(),
 					totalsLabel: "current-run matchup counts",
 					durationMs: apiDurationStats,
 					failedMatchups: apiFailures,

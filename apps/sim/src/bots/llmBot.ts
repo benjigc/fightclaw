@@ -53,6 +53,22 @@ export interface LlmBotConfig {
 	maxTokens?: number;
 }
 
+type TurnContext = {
+	state: MatchState;
+	legalMoves: Move[];
+	turn: number;
+	rng: () => number;
+};
+
+type TurnDecision = {
+	moves: Move[];
+	prompt: string;
+	rawOutput: string;
+	hadAttack: boolean;
+	hadRecruit: boolean;
+	progressObserved: boolean;
+};
+
 export function makeLlmBot(
 	id: string,
 	config: LlmBotConfig & { delayMs?: number },
@@ -83,6 +99,28 @@ export function makeLlmBot(
 	let noProgressStreak = 0;
 	let recruitStreak = 0;
 
+	const runDetailedTurn = async (ctx: TurnContext): Promise<TurnDecision> => {
+		const result = await chooseTurnDetailed(
+			client,
+			id,
+			config,
+			ctx,
+			turnCount,
+			previousSeenState,
+			{
+				noAttackStreak,
+				noProgressStreak,
+				recruitStreak,
+			},
+		);
+		noAttackStreak = result.hadAttack ? 0 : noAttackStreak + 1;
+		recruitStreak = result.hadRecruit ? recruitStreak + 1 : 0;
+		noProgressStreak = result.progressObserved ? 0 : noProgressStreak + 1;
+		turnCount++;
+		previousSeenState = structuredClone(ctx.state);
+		return result;
+	};
+
 	return {
 		id,
 		name: `LlmBot_${config.model}`,
@@ -90,45 +128,11 @@ export function makeLlmBot(
 			return legalMoves[Math.floor(rng() * legalMoves.length)] as Move;
 		},
 		chooseTurn: async (ctx) => {
-			const result = await chooseTurnDetailed(
-				client,
-				id,
-				config,
-				ctx,
-				turnCount,
-				previousSeenState,
-				{
-					noAttackStreak,
-					noProgressStreak,
-					recruitStreak,
-				},
-			);
-			noAttackStreak = result.hadAttack ? 0 : noAttackStreak + 1;
-			recruitStreak = result.hadRecruit ? recruitStreak + 1 : 0;
-			noProgressStreak = result.progressObserved ? 0 : noProgressStreak + 1;
-			turnCount++;
-			previousSeenState = structuredClone(ctx.state);
+			const result = await runDetailedTurn(ctx);
 			return result.moves;
 		},
 		chooseTurnWithMeta: async (ctx) => {
-			const result = await chooseTurnDetailed(
-				client,
-				id,
-				config,
-				ctx,
-				turnCount,
-				previousSeenState,
-				{
-					noAttackStreak,
-					noProgressStreak,
-					recruitStreak,
-				},
-			);
-			noAttackStreak = result.hadAttack ? 0 : noAttackStreak + 1;
-			recruitStreak = result.hadRecruit ? recruitStreak + 1 : 0;
-			noProgressStreak = result.progressObserved ? 0 : noProgressStreak + 1;
-			turnCount++;
-			previousSeenState = structuredClone(ctx.state);
+			const result = await runDetailedTurn(ctx);
 			return {
 				moves: result.moves,
 				prompt: result.prompt,
@@ -143,23 +147,11 @@ async function chooseTurnDetailed(
 	client: OpenAI,
 	botId: string,
 	config: LlmBotConfig & { delayMs?: number },
-	ctx: {
-		state: MatchState;
-		legalMoves: Move[];
-		turn: number;
-		rng: () => number;
-	},
+	ctx: TurnContext,
 	turnCount: number,
 	previousSeenState?: MatchState,
 	loopState?: LoopState,
-): Promise<{
-	moves: Move[];
-	prompt: string;
-	rawOutput: string;
-	hadAttack: boolean;
-	hadRecruit: boolean;
-	progressObserved: boolean;
-}> {
+): Promise<TurnDecision> {
 	const { state, legalMoves, turn } = ctx;
 
 	if (config.delayMs && config.delayMs > 0) await sleep(config.delayMs);
@@ -190,27 +182,8 @@ async function chooseTurnDetailed(
 	let content = "";
 
 	try {
-		const timeoutMs = Math.max(
-			1,
-			config.timeoutMs ??
-				parseEnvInt(process.env.SIM_LLM_TIMEOUT_MS, DEFAULT_LLM_TIMEOUT_MS),
-		);
-		const retryConfig = {
-			maxRetries:
-				config.maxRetries ??
-				parseEnvInt(process.env.SIM_LLM_MAX_RETRIES, DEFAULT_LLM_MAX_RETRIES),
-			baseDelayMs:
-				config.retryBaseMs ??
-				parseEnvInt(
-					process.env.SIM_LLM_RETRY_BASE_MS,
-					DEFAULT_LLM_RETRY_BASE_MS,
-				),
-		};
-		const parallelCalls = Math.max(
-			1,
-			config.parallelCalls ??
-				parseEnvInt(process.env.SIM_LLM_PARALLEL_CALLS, 1),
-		);
+		const { timeoutMs, retryConfig, parallelCalls } =
+			resolveLlmRequestConfig(config);
 
 		const requestOnce = () =>
 			requestWithTimeout(client, config, system, user, timeoutMs);
@@ -254,36 +227,12 @@ async function chooseTurnDetailed(
 
 	// Parse response
 	const parsed = parseLlmResponse(content);
-
-	// Match commands against a simulated evolving legal state so later
-	// commands are checked after earlier actions are applied.
-	const moves: Move[] = [];
-	let simulatedState = state;
-	let currentLegalMoves = legalMoves;
-
-	for (const cmd of parsed.commands.slice(0, 5)) {
-		const matched = matchCommand(cmd, currentLegalMoves);
-		if (!matched) continue;
-
-		const candidate =
-			moves.length === 0 && parsed.reasoning
-				? ({ ...matched, reasoning: parsed.reasoning } as Move)
-				: matched;
-		const applied = Engine.applyMove(simulatedState, candidate);
-		if (!applied.ok) {
-			continue;
-		}
-		moves.push(candidate);
-		simulatedState = applied.state;
-
-		if (Engine.isTerminal(simulatedState).ended) {
-			break;
-		}
-		if (String(Engine.currentPlayer(simulatedState)) !== String(botId)) {
-			break;
-		}
-		currentLegalMoves = Engine.listLegalMoves(simulatedState);
-	}
+	const moves = collectMovesFromParsedCommands(
+		parsed,
+		state,
+		legalMoves,
+		botId,
+	);
 
 	const antiLoopMoves = applyLoopPressurePolicy(moves, {
 		state,
@@ -299,19 +248,7 @@ async function chooseTurnDetailed(
 		moves.push(pickFallbackMove(legalMoves, state, side));
 	}
 
-	const deltaForProgress =
-		previousSeenState != null
-			? buildTurnDelta(previousSeenState, state, side)
-			: undefined;
-	const progressObserved =
-		deltaForProgress != null
-			? deltaForProgress.ownUnitDelta !== 0 ||
-				deltaForProgress.enemyUnitDelta !== 0 ||
-				deltaForProgress.ownHpDelta !== 0 ||
-				deltaForProgress.enemyHpDelta !== 0 ||
-				deltaForProgress.ownVpDelta !== 0 ||
-				deltaForProgress.enemyVpDelta !== 0
-			: false;
+	const progressObserved = hasTurnProgress(delta);
 
 	const commandsMatched = moves.length;
 	const commandsSkipped = parsed.commands.length - commandsMatched;
@@ -344,6 +281,82 @@ async function chooseTurnDetailed(
 		hadRecruit: moves.some((move) => move.action === "recruit"),
 		progressObserved,
 	};
+}
+
+function resolveLlmRequestConfig(config: LlmBotConfig): {
+	timeoutMs: number;
+	retryConfig: { maxRetries: number; baseDelayMs: number };
+	parallelCalls: number;
+} {
+	return {
+		timeoutMs: Math.max(
+			1,
+			config.timeoutMs ??
+				parseEnvInt(process.env.SIM_LLM_TIMEOUT_MS, DEFAULT_LLM_TIMEOUT_MS),
+		),
+		retryConfig: {
+			maxRetries:
+				config.maxRetries ??
+				parseEnvInt(process.env.SIM_LLM_MAX_RETRIES, DEFAULT_LLM_MAX_RETRIES),
+			baseDelayMs:
+				config.retryBaseMs ??
+				parseEnvInt(
+					process.env.SIM_LLM_RETRY_BASE_MS,
+					DEFAULT_LLM_RETRY_BASE_MS,
+				),
+		},
+		parallelCalls: Math.max(
+			1,
+			config.parallelCalls ??
+				parseEnvInt(process.env.SIM_LLM_PARALLEL_CALLS, 1),
+		),
+	};
+}
+
+function collectMovesFromParsedCommands(
+	parsed: { commands: ParsedCommand[]; reasoning: string | undefined },
+	initialState: MatchState,
+	initialLegalMoves: Move[],
+	botId: string,
+): Move[] {
+	// Match commands against a simulated evolving legal state so later
+	// commands are checked after earlier actions are applied.
+	const moves: Move[] = [];
+	let simulatedState = initialState;
+	let currentLegalMoves = initialLegalMoves;
+
+	for (const cmd of parsed.commands.slice(0, 5)) {
+		const matched = matchCommand(cmd, currentLegalMoves);
+		if (!matched) continue;
+
+		const candidate =
+			moves.length === 0 && parsed.reasoning
+				? ({ ...matched, reasoning: parsed.reasoning } as Move)
+				: matched;
+		const applied = Engine.applyMove(simulatedState, candidate);
+		if (!applied.ok) continue;
+
+		moves.push(candidate);
+		simulatedState = applied.state;
+
+		if (Engine.isTerminal(simulatedState).ended) break;
+		if (String(Engine.currentPlayer(simulatedState)) !== String(botId)) break;
+		currentLegalMoves = Engine.listLegalMoves(simulatedState);
+	}
+
+	return moves;
+}
+
+function hasTurnProgress(delta?: TurnDelta): boolean {
+	if (!delta) return false;
+	return (
+		delta.ownUnitDelta !== 0 ||
+		delta.enemyUnitDelta !== 0 ||
+		delta.ownHpDelta !== 0 ||
+		delta.enemyHpDelta !== 0 ||
+		delta.ownVpDelta !== 0 ||
+		delta.enemyVpDelta !== 0
+	);
 }
 
 function requestWithTimeout(

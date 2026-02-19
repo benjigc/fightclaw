@@ -4,6 +4,8 @@ import { createIdentity } from "../appContext";
 import type { AppBindings, AppVariables } from "../appTypes";
 import { requireAdminKey } from "../middleware/auth";
 import { withRequestId } from "../middleware/requestContext";
+import { parseBearerToken } from "../utils/auth";
+import { sha256Hex } from "../utils/crypto";
 import { doFetchWithRetry, isDurableObjectResetError } from "../utils/durable";
 import {
 	badRequest,
@@ -147,9 +149,31 @@ matchesRoutes.post("/v1/matches/:id/finish", requireAdminKey, async (c) => {
 	const matchIdResult = parseUuidParam(c, "id", "Match id");
 	if (!matchIdResult.ok) return matchIdResult.response;
 
-	const agentId = c.req.header("x-agent-id");
+	let agentId = c.req.header("x-agent-id");
 	if (!agentId) {
-		return badRequest(c, "x-agent-id header is required.");
+		const token = parseBearerToken(c.req.header("authorization"));
+		if (token && c.env.API_KEY_PEPPER) {
+			const hash = await sha256Hex(`${c.env.API_KEY_PEPPER}${token}`);
+			const row = await c.env.DB.prepare(
+				[
+					"SELECT agent_id",
+					"FROM api_keys",
+					"WHERE key_hash = ? AND revoked_at IS NULL",
+					"LIMIT 1",
+				].join(" "),
+			)
+				.bind(hash)
+				.first<{ agent_id: string | null }>();
+			if (row?.agent_id) {
+				agentId = row.agent_id;
+			}
+		}
+	}
+	if (!agentId) {
+		return badRequest(
+			c,
+			"Either x-agent-id header or Bearer token in Authorization header is required.",
+		);
 	}
 
 	const jsonResult = await parseJson(c);
@@ -316,6 +340,43 @@ matchesRoutes.get("/v1/matches/:id/events", async (c) => {
 matchesRoutes.get("/v1/matches/:id/spectate", async (c) => {
 	const matchIdResult = parseUuidParam(c, "id", "Match id");
 	if (!matchIdResult.ok) return matchIdResult.response;
+
+	const matchRow = await c.env.DB.prepare(
+		"SELECT status FROM matches WHERE id = ? LIMIT 1",
+	)
+		.bind(matchIdResult.value)
+		.first<{ status: string | null }>();
+
+	// Keep unknown match ids public for compatibility; enforce visibility only
+	// when we know a currently-active match exists.
+	let isPublic = !matchRow?.status || matchRow.status === "ended";
+	if (!isPublic && matchRow?.status === "active") {
+		try {
+			const matchmaker = getMatchmakerStub(c);
+			const featuredResp = await doFetchWithRetry(
+				matchmaker,
+				"https://do/featured",
+				{
+					headers: { "x-request-id": c.get("requestId") },
+				},
+			);
+			if (featuredResp.ok) {
+				const featured = (await featuredResp.json()) as { matchId?: unknown };
+				if (featured && typeof featured.matchId === "string") {
+					isPublic = featured.matchId === matchIdResult.value;
+				}
+			}
+		} catch {
+			// Treat featured lookup failure as non-public.
+		}
+	}
+
+	if (!isPublic) {
+		const provided = c.req.header("x-admin-key");
+		if (!provided || provided !== c.env.ADMIN_KEY) {
+			return forbidden(c);
+		}
+	}
 
 	const stub = getMatchStub(c, matchIdResult.value);
 	const response = await stub.fetch("https://do/spectate", {
