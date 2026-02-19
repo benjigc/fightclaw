@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ArenaClient } from "./client";
 import {
 	HttpLongPollEventSource,
@@ -104,6 +105,14 @@ export const runMatch = async (
 
 	const terminal = await new Promise<RunMatchResult>((resolve, reject) => {
 		let fallbackStarted = false;
+		const startHttpFallback = () => {
+			fallbackStarted = true;
+			const fallbackSource = createHttpSource();
+			void startSource(fallbackSource);
+			source = fallbackSource;
+			transport = source.kind;
+		};
+
 		const startSource = (candidate: MatchEventSource) => {
 			return candidate
 				.start(async (event) => {
@@ -119,10 +128,7 @@ export const runMatch = async (
 						allowTransportFallback &&
 						!fallbackStarted
 					) {
-						fallbackStarted = true;
-						source = createHttpSource();
-						transport = source.kind;
-						void startSource(source);
+						startHttpFallback();
 						return;
 					}
 					reject(error);
@@ -148,11 +154,10 @@ export const runMatch = async (
 			}
 			if (event.type === "error") {
 				if (transport === "ws" && allowTransportFallback && !fallbackStarted) {
-					fallbackStarted = true;
-					source = createHttpSource();
-					transport = source.kind;
-					void startSource(source);
+					startHttpFallback();
+					return;
 				}
+				reject(new Error(`Match event source error: ${event.error}`));
 				return;
 			}
 			if (event.type !== "your_turn") return;
@@ -174,7 +179,7 @@ export const runMatch = async (
 					stateVersion: expectedVersion,
 				});
 				const response = await client.submitMove(matchId, {
-					moveId: crypto.randomUUID(),
+					moveId: randomUUID(),
 					expectedVersion,
 					move,
 				});

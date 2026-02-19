@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 
 type AnyContext = Context;
+const reservedEnvelopeKeys = new Set(["ok", "error", "code", "requestId"]);
 
 const readRequestId = (c: AnyContext) => {
 	try {
@@ -13,6 +14,20 @@ const readRequestId = (c: AnyContext) => {
 	}
 };
 
+const sanitizeExtra = (extra?: Record<string, unknown>) => {
+	if (!extra) return undefined;
+	const entries = Object.entries(extra).filter(
+		([key]) => !reservedEnvelopeKeys.has(key),
+	);
+	if (entries.length === 0) return undefined;
+	return Object.fromEntries(entries);
+};
+
+const readCodeFromExtra = (extra?: Record<string, unknown>) => {
+	if (!extra) return undefined;
+	return typeof extra.code === "string" ? extra.code : undefined;
+};
+
 const errorBody = (
 	c: AnyContext,
 	error: string,
@@ -20,12 +35,14 @@ const errorBody = (
 	extra?: Record<string, unknown>,
 ) => {
 	const requestId = readRequestId(c);
+	const safeExtra = sanitizeExtra(extra);
+	const safeCode = code ?? readCodeFromExtra(extra);
 	return {
+		...(safeExtra ?? {}),
 		ok: false,
 		error,
-		...(code ? { code } : {}),
+		...(safeCode ? { code: safeCode } : {}),
 		...(requestId ? { requestId } : {}),
-		...(extra ?? {}),
 	};
 };
 
@@ -79,4 +96,8 @@ export const serviceUnavailable = (
 	extra?: Record<string, unknown>,
 ) => {
 	return c.json(errorBody(c, error, undefined, extra), 503);
+};
+
+export const upgradeRequired = (c: AnyContext, error: string) => {
+	return c.json(errorBody(c, error, "websocket_upgrade_required"), 426);
 };

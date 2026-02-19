@@ -23,11 +23,13 @@ import { sha256Hex } from "./utils/crypto";
 import { doFetchWithRetry } from "./utils/durable";
 import {
 	badRequest,
+	conflict,
 	forbidden,
 	notFound,
 	serviceUnavailable,
 	tooManyRequests,
 	unauthorized,
+	upgradeRequired,
 } from "./utils/httpErrors";
 
 const app = new Hono<{ Bindings: AppBindings; Variables: AppVariables }>();
@@ -202,15 +204,7 @@ app.get("/ws", async (c) => {
 	if (verifiedResponse) return verifiedResponse;
 
 	if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
-		return c.json(
-			{
-				ok: false,
-				error: "Expected websocket upgrade.",
-				code: "websocket_upgrade_required",
-				requestId: c.get("requestId"),
-			},
-			426,
-		);
+		return upgradeRequired(c, "Expected websocket upgrade.");
 	}
 	const agentId = c.get("agentId");
 	if (!agentId) return unauthorized(c);
@@ -232,15 +226,7 @@ app.get("/v1/matches/:id/ws", async (c) => {
 	if (verifiedResponse) return verifiedResponse;
 
 	if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
-		return c.json(
-			{
-				ok: false,
-				error: "Expected websocket upgrade.",
-				code: "websocket_upgrade_required",
-				requestId: c.get("requestId"),
-			},
-			426,
-		);
+		return upgradeRequired(c, "Expected websocket upgrade.");
 	}
 
 	const agentId = c.get("agentId");
@@ -264,15 +250,9 @@ app.get("/v1/matches/:id/ws", async (c) => {
 		matchId?: string;
 	};
 	if (queueStatus.status !== "ready" || queueStatus.matchId !== matchId) {
-		return c.json(
-			{
-				ok: false,
-				error: "Agent is not currently matched to this match.",
-				code: "agent_not_matched",
-				requestId: c.get("requestId"),
-			},
-			409,
-		);
+		return conflict(c, "Agent is not currently matched to this match.", {
+			code: "agent_not_matched",
+		});
 	}
 
 	const matchStub = getMatchStub(c.env, matchId);

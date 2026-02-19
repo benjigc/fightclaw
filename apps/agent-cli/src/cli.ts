@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
 	ArenaClient,
 	type MoveProvider,
@@ -58,7 +59,7 @@ const createClient = (baseUrl: string, apiKey?: string) => {
 	return new ArenaClient({
 		baseUrl,
 		agentApiKey: apiKey,
-		requestIdProvider: () => crypto.randomUUID(),
+		requestIdProvider: () => randomUUID(),
 		onLog: () => {
 			// Intentionally no-op by default; callers can plug this in.
 		},

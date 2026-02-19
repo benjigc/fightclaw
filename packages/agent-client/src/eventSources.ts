@@ -34,6 +34,7 @@ export class WsEventSource implements MatchEventSource {
 				...this.client.buildAgentAuthHeaders(),
 			},
 		});
+		let closedByClient = false;
 
 		await new Promise<void>((resolve, reject) => {
 			const timer = setTimeout(() => {
@@ -100,10 +101,12 @@ export class WsEventSource implements MatchEventSource {
 			void handler({ type: "error", error: error.message });
 		});
 		ws.on("close", () => {
+			if (closedByClient) return;
 			void handler({ type: "error", error: "ws_closed" });
 		});
 
 		return () => {
+			closedByClient = true;
 			ws.close();
 		};
 	}

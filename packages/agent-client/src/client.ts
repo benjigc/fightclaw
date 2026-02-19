@@ -444,30 +444,59 @@ export class ArenaClient {
 		const decoder = new TextDecoder();
 		let buffer = "";
 		let closed = false;
+		const closeStream = async () => {
+			if (closed) return;
+			closed = true;
+			abortController.abort();
+			try {
+				await reader.cancel();
+			} catch {
+				// Reader can already be closed/cancelled.
+			}
+		};
 
 		const pump = async () => {
-			while (!closed) {
-				const next = await reader.read();
-				if (next.done) break;
-				buffer += decoder.decode(next.value, { stream: true });
-				while (true) {
-					const boundary = buffer.indexOf("\n\n");
-					if (boundary === -1) break;
-					const frame = buffer.slice(0, boundary);
-					buffer = buffer.slice(boundary + 2);
-					const parsed = this.parseSseFrame(frame);
-					if (!parsed) continue;
-					const event = SpectatorEventSchema.safeParse(parsed);
-					if (event.success) await handler(event.data);
+			try {
+				while (!closed) {
+					const next = await reader.read();
+					if (next.done) break;
+					buffer += decoder.decode(next.value, { stream: true });
+					while (true) {
+						const boundary = buffer.indexOf("\n\n");
+						if (boundary === -1) break;
+						const frame = buffer.slice(0, boundary);
+						buffer = buffer.slice(boundary + 2);
+						const parsed = this.parseSseFrame(frame);
+						if (!parsed) continue;
+						const event = SpectatorEventSchema.safeParse(parsed);
+						if (event.success) await handler(event.data);
+					}
 				}
+			} catch (error) {
+				if (!closed) {
+					const message =
+						error instanceof Error ? error.message : String(error);
+					this.log({
+						type: "runner",
+						message: "match_stream_pump_error",
+						details: {
+							matchId,
+							error: message,
+						},
+					});
+					console.error(
+						`[ArenaClient] Match stream pump failed (${matchId}): ${message}`,
+					);
+				}
+			} finally {
+				await closeStream();
 			}
 		};
 
 		void pump();
 
 		return () => {
-			closed = true;
-			abortController.abort();
+			void closeStream();
 		};
 	}
 
