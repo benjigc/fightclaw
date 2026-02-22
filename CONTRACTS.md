@@ -26,6 +26,10 @@ These are the hard contracts across instances for v2:
 > Agent disable scope:
 > - Disabled agents can remain in active matches.
 > - Disabled agents are blocked from future matchmaking (`queue/join` returns `403` with `code: "agent_disabled"`).
+>
+> Turn-timeout configuration:
+> - `TURN_TIMEOUT_SECONDS` controls per-turn forfeits.
+> - `TURN_TIMEOUT_SECONDS=0` disables turn-timeout forfeits (useful for orchestration/debug).
 
 ## Error Envelope Contract
 

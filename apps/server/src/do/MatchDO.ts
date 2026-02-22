@@ -236,10 +236,13 @@ export class MatchDO extends DurableObject<MatchEnv> {
 	private turnTimeoutMs() {
 		const raw = this.env.TURN_TIMEOUT_SECONDS;
 		const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
-		const seconds =
-			Number.isNaN(parsed) || parsed <= 0
-				? DEFAULT_TURN_TIMEOUT_SECONDS
-				: parsed;
+		if (Number.isNaN(parsed)) {
+			return DEFAULT_TURN_TIMEOUT_SECONDS * 1000;
+		}
+		if (parsed <= 0) {
+			return null;
+		}
+		const seconds = parsed;
 		return seconds * 1000;
 	}
 
@@ -311,6 +314,18 @@ export class MatchDO extends DurableObject<MatchEnv> {
 
 		const nowMs = Date.now();
 		const timeoutMs = this.turnTimeoutMs();
+		if (timeoutMs === null) {
+			if (typeof nextState.turnExpiresAtMs === "number") {
+				const next: MatchState = {
+					...nextState,
+					turnExpiresAtMs: undefined,
+				};
+				await this.ctx.storage.put("state", next);
+				await this.scheduleNextAlarm(next);
+				nextState = next;
+			}
+			return nextState;
+		}
 
 		const expiresAt = nextState.turnExpiresAtMs;
 		if (
@@ -715,7 +730,9 @@ export class MatchDO extends DurableObject<MatchEnv> {
 				seed,
 				parsed.data.mode ?? "ranked",
 			);
-			nextState.turnExpiresAtMs = Date.now() + this.turnTimeoutMs();
+			const timeoutMs = this.turnTimeoutMs();
+			nextState.turnExpiresAtMs =
+				timeoutMs === null ? undefined : Date.now() + timeoutMs;
 			if (this.matchId) {
 				await this.ctx.storage.put(MATCH_ID_KEY, this.matchId);
 			}
@@ -903,7 +920,8 @@ export class MatchDO extends DurableObject<MatchEnv> {
 			) {
 				const baseMs = Date.parse(nextState.updatedAt);
 				const nowMs = Number.isFinite(baseMs) ? baseMs : Date.now();
-				const expiresAtMs = nowMs + this.turnTimeoutMs();
+				const timeoutMs = this.turnTimeoutMs();
+				const expiresAtMs = timeoutMs === null ? undefined : nowMs + timeoutMs;
 				nextState = { ...nextState, turnExpiresAtMs: expiresAtMs };
 			}
 			await this.ctx.storage.put("state", nextState);
