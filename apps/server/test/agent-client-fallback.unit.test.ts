@@ -187,6 +187,74 @@ describe("agent-client runMatch transport fallback", () => {
 		}
 	});
 
+	it("forwards move reasoning as publicThought on submit", async () => {
+		const wsStop = vi.fn();
+		const wsStart = vi
+			.spyOn(WsEventSource.prototype, "start")
+			.mockImplementation(async (handler: MatchEventHandler) => {
+				queueMicrotask(() => {
+					void handler({ type: "your_turn", stateVersion: 0 });
+				});
+				return wsStop;
+			});
+
+		const httpStart = vi
+			.spyOn(HttpLongPollEventSource.prototype, "start")
+			.mockImplementation(async () => {
+				throw new Error("http fallback should not start");
+			});
+
+		const submitMove = vi.fn(async () => {
+			return {
+				ok: true as const,
+				state: {
+					stateVersion: 1,
+					status: "ended" as const,
+					winnerAgentId: "agent-a",
+					endReason: "terminal",
+				},
+			};
+		});
+
+		const client = {
+			me: vi.fn(async () => ({ agentId: "agent-a" })),
+			queueJoin: vi.fn(async () => ({
+				status: "ready" as const,
+				matchId: "match-1",
+				opponentId: "agent-b",
+			})),
+			waitForMatch: vi.fn(),
+			submitMove,
+		};
+
+		const moveProvider = {
+			nextMove: vi.fn(async () => ({
+				action: "pass" as const,
+				reasoning: "Opening line of thought",
+			})),
+		};
+
+		try {
+			await runMatch(client as never, {
+				moveProvider,
+				allowTransportFallback: true,
+			});
+
+			expect(submitMove).toHaveBeenCalledTimes(1);
+			expect(submitMove).toHaveBeenCalledWith(
+				"match-1",
+				expect.objectContaining({
+					expectedVersion: 0,
+					publicThought: "Opening line of thought",
+				}),
+			);
+			expect(wsStop).toHaveBeenCalledTimes(1);
+		} finally {
+			wsStart.mockRestore();
+			httpStart.mockRestore();
+		}
+	});
+
 	it("falls back to pass when move provider exceeds timeout", async () => {
 		const wsStop = vi.fn();
 		const wsStart = vi

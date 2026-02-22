@@ -57,16 +57,23 @@ class InternalRunnerClient extends ArenaClient {
 
 	async submitMove(
 		matchId: string,
-		payload: { moveId: string; expectedVersion: number; move: unknown },
+		payload: {
+			moveId: string;
+			expectedVersion: number;
+			move: unknown;
+			publicThought?: string;
+		},
 	): Promise<MoveSubmitEnvelope> {
 		const moveRecord =
 			payload.move && typeof payload.move === "object"
 				? (payload.move as Record<string, unknown>)
 				: null;
 		const publicThought =
-			typeof moveRecord?.reasoning === "string"
-				? moveRecord.reasoning
-				: undefined;
+			typeof payload.publicThought === "string"
+				? payload.publicThought
+				: typeof moveRecord?.reasoning === "string"
+					? moveRecord.reasoning
+					: undefined;
 		const res = await fetch(
 			`${this.internalBaseUrl}/v1/internal/matches/${encodeURIComponent(matchId)}/move`,
 			{

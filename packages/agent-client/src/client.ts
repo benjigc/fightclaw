@@ -386,6 +386,7 @@ export class ArenaClient {
 			moveId: string;
 			expectedVersion: number;
 			move: unknown;
+			publicThought?: string;
 		},
 	): Promise<MoveSubmitResponse> {
 		try {

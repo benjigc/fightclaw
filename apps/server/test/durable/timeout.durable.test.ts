@@ -35,24 +35,30 @@ it("forfeits on turn timeout via alarm", async () => {
 	// Avoid pulling in the full generated Env binding type here (it can cause deep
 	// instantiation errors in tsc).
 	const match = (env as unknown as Record<string, unknown>).MATCH as
-		| DurableObjectNamespace
+		| {
+				idFromName: (name: string) => unknown;
+				get: (id: unknown) => unknown;
+		  }
 		| undefined;
 	if (!match) throw new Error("MATCH durable object binding is not available.");
 
 	const id = match.idFromName(matchId);
-	const stub: DurableObjectStub = match.get(id);
+	const stub = match.get(id);
 
-	await runInDurableObject(stub, async (instance: unknown, state) => {
-		const stored = await state.storage.get<Record<string, unknown>>("state");
-		if (!stored) return new Response("missing state", { status: 500 });
-		await state.storage.put("state", {
-			...stored,
-			turnExpiresAtMs: Date.now() - 1,
-		});
-		const anyInstance = instance as { alarm?: () => Promise<void> };
-		await anyInstance.alarm?.();
-		return new Response("ok");
-	});
+	await runInDurableObject(
+		stub as Parameters<typeof runInDurableObject>[0],
+		async (instance: unknown, state) => {
+			const stored = await state.storage.get<Record<string, unknown>>("state");
+			if (!stored) return new Response("missing state", { status: 500 });
+			await state.storage.put("state", {
+				...stored,
+				turnExpiresAtMs: Date.now() - 1,
+			});
+			const anyInstance = instance as { alarm?: () => Promise<void> };
+			await anyInstance.alarm?.();
+			return new Response("ok");
+		},
+	);
 
 	const matchRow = await env.DB.prepare(
 		"SELECT status, ended_at FROM matches WHERE id = ?",
@@ -84,22 +90,28 @@ it("forfeits opportunistically on state fetch after timeout", async () => {
 	// Avoid pulling in the full generated Env binding type here (it can cause deep
 	// instantiation errors in tsc).
 	const match = (env as unknown as Record<string, unknown>).MATCH as
-		| DurableObjectNamespace
+		| {
+				idFromName: (name: string) => unknown;
+				get: (id: unknown) => unknown;
+		  }
 		| undefined;
 	if (!match) throw new Error("MATCH durable object binding is not available.");
 
 	const id = match.idFromName(matchId);
-	const stub: DurableObjectStub = match.get(id);
+	const stub = match.get(id);
 
-	await runInDurableObject(stub, async (_instance: unknown, state) => {
-		const stored = await state.storage.get<Record<string, unknown>>("state");
-		if (!stored) return new Response("missing state", { status: 500 });
-		await state.storage.put("state", {
-			...stored,
-			turnExpiresAtMs: Date.now() - 1,
-		});
-		return new Response("ok");
-	});
+	await runInDurableObject(
+		stub as Parameters<typeof runInDurableObject>[0],
+		async (_instance: unknown, state) => {
+			const stored = await state.storage.get<Record<string, unknown>>("state");
+			if (!stored) return new Response("missing state", { status: 500 });
+			await state.storage.put("state", {
+				...stored,
+				turnExpiresAtMs: Date.now() - 1,
+			});
+			return new Response("ok");
+		},
+	);
 
 	const stateRes = await SELF.fetch(
 		`https://example.com/v1/matches/${matchId}/state`,
@@ -116,4 +128,58 @@ it("forfeits opportunistically on state fetch after timeout", async () => {
 		.bind(matchId)
 		.first<{ reason: string | null }>();
 	expect(resultRow?.reason).toBe("turn_timeout");
+});
+
+it("disables turn timeout when TURN_TIMEOUT_SECONDS is 0", async () => {
+	const { matchId } = await setupMatch();
+
+	const match = (env as unknown as Record<string, unknown>).MATCH as
+		| {
+				idFromName: (name: string) => unknown;
+				get: (id: unknown) => unknown;
+		  }
+		| undefined;
+	if (!match) {
+		throw new Error("MATCH durable object binding is not available.");
+	}
+
+	const id = match.idFromName(matchId);
+	const stub = match.get(id);
+
+	await runInDurableObject(
+		stub as Parameters<typeof runInDurableObject>[0],
+		async (instance: unknown, state) => {
+			const anyInstance = instance as {
+				env?: { TURN_TIMEOUT_SECONDS?: string };
+				alarm?: () => Promise<void>;
+			};
+			if (anyInstance.env) {
+				anyInstance.env.TURN_TIMEOUT_SECONDS = "0";
+			}
+			const stored = await state.storage.get<Record<string, unknown>>("state");
+			if (!stored) return new Response("missing state", { status: 500 });
+			await state.storage.put("state", {
+				...stored,
+				turnExpiresAtMs: Date.now() - 1,
+			});
+			await anyInstance.alarm?.();
+			return new Response("ok");
+		},
+	);
+
+	const stateRes = await SELF.fetch(
+		`https://example.com/v1/matches/${matchId}/state`,
+	);
+	expect(stateRes.status).toBe(200);
+	const stateJson = (await stateRes.json()) as {
+		state: { status?: string } | null;
+	};
+	expect(stateJson.state?.status).toBe("active");
+
+	const resultRow = await env.DB.prepare(
+		"SELECT reason FROM match_results WHERE match_id = ?",
+	)
+		.bind(matchId)
+		.first<{ reason: string | null }>();
+	expect(resultRow).toBeNull();
 });

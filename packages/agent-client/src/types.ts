@@ -133,6 +133,7 @@ export type RunMatchOptions = {
 	moveProvider: MoveProvider;
 	preferredTransport?: "ws" | "http";
 	allowTransportFallback?: boolean;
+	wsOpenTimeoutMs?: number;
 	queueTimeoutMs?: number;
 	queueWaitTimeoutSeconds?: number;
 	httpPollIntervalMs?: number;

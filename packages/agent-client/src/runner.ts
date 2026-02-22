@@ -84,6 +84,7 @@ export const runMatch = async (
 ): Promise<RunMatchResult> => {
 	const preferredTransport = options.preferredTransport ?? "ws";
 	const allowTransportFallback = options.allowTransportFallback ?? true;
+	const wsOpenTimeoutMs = options.wsOpenTimeoutMs ?? 3_000;
 	const queueWaitTimeoutSeconds = options.queueWaitTimeoutSeconds ?? 30;
 	const queueTimeoutMs = options.queueTimeoutMs ?? 10 * 60 * 1000;
 	const httpPollIntervalMs = options.httpPollIntervalMs ?? 1_500;
@@ -150,7 +151,7 @@ export const runMatch = async (
 	const preferredSource =
 		preferredTransport === "http"
 			? createHttpSource()
-			: new WsEventSource(client, matchId);
+			: new WsEventSource(client, matchId, wsOpenTimeoutMs);
 	let source = preferredSource;
 	let lastObservedVersion = -1;
 	const handledTurns = new Set<number>();
@@ -263,11 +264,17 @@ export const runMatch = async (
 						}
 
 						const move = await resolveMove(expectedVersion);
+						const publicThought =
+							typeof move.reasoning === "string" &&
+							move.reasoning.trim().length > 0
+								? move.reasoning
+								: undefined;
 
 						const response = await client.submitMove(matchId, {
 							moveId: randomUUID(),
 							expectedVersion,
 							move,
+							...(publicThought ? { publicThought } : {}),
 						});
 						if (response.ok) {
 							lastObservedVersion = response.state.stateVersion;
