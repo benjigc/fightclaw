@@ -237,3 +237,62 @@ it("avoids immediate rematches when alternatives exist", async () => {
 	expect(bStatusJson.status).toBe("waiting");
 	expect(bStatusJson.matchId).toBe(bJoinJson.matchId);
 });
+
+it("blocks disabled agents and prunes their waiting queue entries", async () => {
+	const disabled = await createAgent("OldKai", "old-kai-key");
+	const agentB = await createAgent("AgentSmith", "agent-smith-key");
+	const agentC = await createAgent("Neo", "neo-key");
+
+	const disabledJoin = await SELF.fetch(
+		"https://example.com/v1/matches/queue",
+		{
+			method: "POST",
+			headers: authHeader(disabled.key),
+		},
+	);
+	const disabledJoinJson = (await disabledJoin.json()) as {
+		status: string;
+		matchId: string;
+	};
+	expect(disabledJoinJson.status).toBe("waiting");
+
+	const disableRes = await SELF.fetch(
+		`https://example.com/v1/admin/agents/${disabled.id}/disable`,
+		{
+			method: "POST",
+			headers: {
+				"x-admin-key": env.ADMIN_KEY,
+			},
+		},
+	);
+	expect(disableRes.status).toBe(200);
+
+	const blockedJoin = await SELF.fetch("https://example.com/v1/matches/queue", {
+		method: "POST",
+		headers: authHeader(disabled.key),
+	});
+	expect(blockedJoin.status).toBe(403);
+	const blockedBody = (await blockedJoin.json()) as { code?: string };
+	expect(blockedBody.code).toBe("agent_disabled");
+
+	const bJoin = await SELF.fetch("https://example.com/v1/matches/queue", {
+		method: "POST",
+		headers: authHeader(agentB.key),
+	});
+	const bJoinJson = (await bJoin.json()) as { status: string; matchId: string };
+	expect(bJoinJson.status).toBe("waiting");
+
+	const cJoin = await SELF.fetch("https://example.com/v1/matches/queue", {
+		method: "POST",
+		headers: authHeader(agentC.key),
+	});
+	const cJoinJson = (await cJoin.json()) as {
+		status: string;
+		matchId: string;
+		opponentId?: string;
+	};
+	expect(cJoinJson.status).toBe("ready");
+	expect(cJoinJson.matchId).toBe(bJoinJson.matchId);
+	expect(cJoinJson.opponentId).toBe(agentB.id);
+	expect(cJoinJson.matchId).not.toBe(disabledJoinJson.matchId);
+});

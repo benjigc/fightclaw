@@ -387,9 +387,14 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 					}),
 				).then(async (response) => {
 					if (!response.ok) {
+						const body = (await response.json().catch(() => null)) as unknown;
+						const error =
+							isRecord(body) && typeof body.error === "string"
+								? body.error
+								: "queue_join_failed";
 						this.sendToAgentSession(agentId, {
 							type: "error",
-							error: "queue_join_failed",
+							error,
 						});
 						return;
 					}
@@ -574,9 +579,48 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 		return parsed;
 	}
 
+	private async getQueueEligibility(agentId: string) {
+		const row = await this.env.DB.prepare(
+			"SELECT verified_at, disabled_at FROM agents WHERE id = ? LIMIT 1",
+		)
+			.bind(agentId)
+			.first<{
+				verified_at: string | null;
+				disabled_at: string | null;
+			}>();
+		if (!row?.verified_at) return "unverified" as const;
+		if (row.disabled_at) return "disabled" as const;
+		return "eligible" as const;
+	}
+
+	private async getEligibleQueuedAgentIds(agentIds: string[]) {
+		const unique = [...new Set(agentIds)];
+		if (unique.length === 0) return new Set<string>();
+
+		const placeholders = unique.map(() => "?").join(", ");
+		const { results } = await this.env.DB.prepare(
+			[
+				"SELECT id",
+				"FROM agents",
+				"WHERE verified_at IS NOT NULL AND disabled_at IS NULL",
+				`AND id IN (${placeholders})`,
+			].join(" "),
+		)
+			.bind(...unique)
+			.all<{ id: string | null }>();
+
+		const eligible = new Set<string>();
+		for (const row of results ?? []) {
+			if (typeof row.id === "string" && row.id.length > 0) {
+				eligible.add(row.id);
+			}
+		}
+		return eligible;
+	}
+
 	private async loadQueuePruned(nowMs: number): Promise<QueueEntry[]> {
 		const queue = (await this.ctx.storage.get<QueueEntry[]>(QUEUE_KEY)) ?? [];
-		const pruned = queue.filter((entry) => {
+		const structurallyValid = queue.filter((entry) => {
 			if (!entry || typeof entry !== "object") return false;
 			if (typeof entry.agentId !== "string" || entry.agentId.length === 0) {
 				return false;
@@ -595,6 +639,13 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 			}
 			return nowMs - entry.enqueuedAtMs <= QUEUE_TTL_MS;
 		});
+
+		const eligibleAgentIds = await this.getEligibleQueuedAgentIds(
+			structurallyValid.map((entry) => entry.agentId),
+		);
+		const pruned = structurallyValid.filter((entry) =>
+			eligibleAgentIds.has(entry.agentId),
+		);
 
 		if (pruned.length !== queue.length) {
 			await this.ctx.storage.put(QUEUE_KEY, pruned);
@@ -679,6 +730,25 @@ export class MatchmakerDO extends DurableObject<MatchmakerEnv> {
 				return Response.json(
 					{ error: "Agent id is required." },
 					{ status: 400 },
+				);
+			}
+			const eligibility = await this.getQueueEligibility(agentId);
+			if (eligibility === "disabled") {
+				return Response.json(
+					{
+						error: "Agent is disabled from matchmaking.",
+						code: "agent_disabled",
+					},
+					{ status: 403 },
+				);
+			}
+			if (eligibility !== "eligible") {
+				return Response.json(
+					{
+						error: "Agent not verified.",
+						code: "agent_not_verified",
+					},
+					{ status: 403 },
 				);
 			}
 			this.clearPendingQueueLeave(agentId);

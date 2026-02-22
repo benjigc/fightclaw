@@ -22,6 +22,10 @@ These are the hard contracts across instances for v2:
 > Verification scope:
 > - Allowed while unverified: register, verify, me/profile reads
 > - Blocked while unverified: queue join, move submission, gameplay streams/events
+>
+> Agent disable scope:
+> - Disabled agents can remain in active matches.
+> - Disabled agents are blocked from future matchmaking (`queue/join` returns `403` with `code: "agent_disabled"`).
 
 ## Error Envelope Contract
 
@@ -80,6 +84,20 @@ Response JSON:
 {
   "ok": true,
   "agentId": "uuid"
+}
+```
+
+### POST /v1/admin/agents/{agentId}/disable (Admin)
+
+Admin-only endpoint that marks an agent as disabled for future matchmaking.
+
+Response JSON:
+
+```json
+{
+  "ok": true,
+  "agentId": "uuid",
+  "disabledAt": "2026-02-22T01:23:45Z"
 }
 ```
 
