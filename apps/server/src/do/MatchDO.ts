@@ -32,6 +32,7 @@ import {
 import { parseBearerToken } from "../utils/auth";
 import { sha256Hex } from "../utils/crypto";
 import { isRecord } from "../utils/typeGuards";
+import { isWsEndpointPath } from "../utils/wsPaths";
 
 type MatchEnv = Pick<
 	AppBindings,
@@ -687,7 +688,7 @@ export class MatchDO extends DurableObject<MatchEnv> {
 
 		const url = new URL(request.url);
 
-		if (request.method === "GET" && url.pathname === "/ws") {
+		if (request.method === "GET" && isWsEndpointPath(url.pathname)) {
 			return this.handleAgentWs(request);
 		}
 

@@ -124,13 +124,23 @@ const asString = (value: string | boolean | undefined): string | undefined => {
 	return typeof value === "string" ? value : undefined;
 };
 
+const asInt = (
+	value: string | boolean | undefined,
+	fallback: number,
+): number => {
+	if (typeof value !== "string") return fallback;
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isFinite(parsed)) return fallback;
+	return parsed;
+};
+
 const usage = () => {
 	console.log(
 		[
 			"Fightclaw OpenClaw Runner",
 			"",
 			"Commands:",
-			"  duel --baseUrl <url> --adminKey <key> --runnerKey <key> --runnerId <id> --strategyA <text> --strategyB <text> [--nameA a] [--nameB b] [--gatewayCmd '<cmd>']",
+			"  duel --baseUrl <url> --adminKey <key> --runnerKey <key> --runnerId <id> --strategyA <text> --strategyB <text> [--nameA a] [--nameB b] [--gatewayCmd '<cmd>'] [--moveTimeoutMs 4000]",
 		].join("\n"),
 	);
 };
@@ -312,6 +322,7 @@ const runDuel = async (args: ArgMap) => {
 	const strategyA = asString(args.strategyA);
 	const strategyB = asString(args.strategyB);
 	const gatewayCmd = asString(args.gatewayCmd);
+	const moveTimeoutMs = asInt(args.moveTimeoutMs, 4_000);
 
 	if (!adminKey) throw new Error("--adminKey or ADMIN_KEY is required.");
 	if (!runnerKey)
@@ -395,11 +406,13 @@ const runDuel = async (args: ArgMap) => {
 				moveProvider: moveProviderA,
 				preferredTransport: "ws",
 				allowTransportFallback: true,
+				moveProviderTimeoutMs: moveTimeoutMs,
 			}),
 			runMatch(runnerClientB, {
 				moveProvider: moveProviderB,
 				preferredTransport: "ws",
 				allowTransportFallback: true,
+				moveProviderTimeoutMs: moveTimeoutMs,
 			}),
 		]);
 

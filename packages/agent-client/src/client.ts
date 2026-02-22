@@ -66,6 +66,18 @@ const moveSubmitSchema = z.union([
 			status: z.enum(["active", "ended"]).optional(),
 			winnerAgentId: z.string().nullable().optional(),
 			endReason: z.string().optional(),
+			game: z
+				.object({
+					activePlayer: z.string().optional(),
+					players: z
+						.record(
+							z.string(),
+							z.object({ id: z.string().optional() }).passthrough(),
+						)
+						.optional(),
+				})
+				.passthrough()
+				.optional(),
 		}),
 	}),
 	z.object({

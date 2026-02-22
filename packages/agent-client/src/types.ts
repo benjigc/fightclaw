@@ -66,6 +66,10 @@ export type MoveSubmitResponse =
 				status?: "active" | "ended";
 				winnerAgentId?: string | null;
 				endReason?: string;
+				game?: {
+					activePlayer?: string;
+					players?: Record<string, { id?: string }>;
+				};
 			};
 	  }
 	| {
@@ -132,6 +136,8 @@ export type RunMatchOptions = {
 	queueTimeoutMs?: number;
 	queueWaitTimeoutSeconds?: number;
 	httpPollIntervalMs?: number;
+	moveProviderTimeoutMs?: number;
+	moveProviderTimeoutFallbackMove?: Move;
 };
 
 export type RunMatchResult = {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Move } from "@fightclaw/engine";
 import type { ArenaClient } from "./client";
 import {
 	HttpLongPollEventSource,
@@ -12,6 +13,29 @@ import type {
 	RunMatchResult,
 	RunnerEvent,
 } from "./types";
+
+const DEFAULT_TIMEOUT_FALLBACK_MOVE: Move = {
+	action: "pass",
+	reasoning: "Timed safety fallback: pass turn.",
+};
+
+const MAX_CONSECUTIVE_ACTIONS_PER_TURN = 32;
+
+const getActiveAgentIdFromGame = (
+	game:
+		| {
+				activePlayer?: string;
+				players?: Record<string, { id?: string }>;
+		  }
+		| undefined,
+) => {
+	const activePlayer = game?.activePlayer;
+	const players = game?.players;
+	if (!activePlayer || !players) return null;
+	const active = players[activePlayer];
+	if (!active || typeof active.id !== "string") return null;
+	return active.id;
+};
 
 const normalizeLoser = (
 	agentA: string,
@@ -63,6 +87,37 @@ export const runMatch = async (
 	const queueWaitTimeoutSeconds = options.queueWaitTimeoutSeconds ?? 30;
 	const queueTimeoutMs = options.queueTimeoutMs ?? 10 * 60 * 1000;
 	const httpPollIntervalMs = options.httpPollIntervalMs ?? 1_500;
+	const moveProviderTimeoutMs = options.moveProviderTimeoutMs;
+	const moveProviderTimeoutFallbackMove =
+		options.moveProviderTimeoutFallbackMove ?? DEFAULT_TIMEOUT_FALLBACK_MOVE;
+	const resolveMove = async (stateVersion: number): Promise<Move> => {
+		const moveContext = {
+			agentId: me.agentId,
+			matchId,
+			stateVersion,
+		};
+		if (
+			typeof moveProviderTimeoutMs !== "number" ||
+			!Number.isFinite(moveProviderTimeoutMs) ||
+			moveProviderTimeoutMs <= 0
+		) {
+			return await options.moveProvider.nextMove(moveContext);
+		}
+
+		let timeout: ReturnType<typeof setTimeout> | null = null;
+		try {
+			return await Promise.race([
+				options.moveProvider.nextMove(moveContext),
+				new Promise<Move>((resolveTimeout) => {
+					timeout = setTimeout(() => {
+						resolveTimeout(moveProviderTimeoutFallbackMove);
+					}, moveProviderTimeoutMs);
+				}),
+			]);
+		} finally {
+			if (timeout) clearTimeout(timeout);
+		}
+	};
 
 	const me = await client.me();
 	const joined = await client.queueJoin();
@@ -99,7 +154,7 @@ export const runMatch = async (
 	let source = preferredSource;
 	let lastObservedVersion = -1;
 	const handledTurns = new Set<number>();
-	const inFlightTurns = new Set<number>();
+	let turnLoopInFlight = false;
 	let transport = source.kind;
 
 	const stopFns: Array<() => void> = [];
@@ -119,13 +174,8 @@ export const runMatch = async (
 			const startSource = (candidate: MatchEventSource) => {
 				return candidate
 					.start(async (event) => {
-						if (
-							candidate.kind === "ws" &&
-							fallbackStarted &&
-							event.type === "error"
-						) {
-							return;
-						}
+						// Once fallback is active, treat WS as dead to avoid stale turn signals.
+						if (candidate.kind === "ws" && fallbackStarted) return;
 						transport = candidate.kind;
 						await handleEvent(event, candidate.kind);
 					})
@@ -190,50 +240,75 @@ export const runMatch = async (
 				}
 				if (event.type !== "your_turn") return;
 
-				const expectedVersion =
+				const initialExpectedVersion =
 					event.stateVersion >= 0 ? event.stateVersion : lastObservedVersion;
-				if (expectedVersion < 0) {
+				if (initialExpectedVersion < 0) {
 					return;
 				}
-				if (handledTurns.has(expectedVersion)) {
+				if (handledTurns.has(initialExpectedVersion)) {
 					return;
 				}
-				if (inFlightTurns.has(expectedVersion)) {
+				if (turnLoopInFlight) {
 					return;
 				}
-				inFlightTurns.add(expectedVersion);
+				turnLoopInFlight = true;
 
 				try {
-					const move = await options.moveProvider.nextMove({
-						agentId: me.agentId,
-						matchId,
-						stateVersion: expectedVersion,
-					});
-					const response = await client.submitMove(matchId, {
-						moveId: randomUUID(),
-						expectedVersion,
-						move,
-					});
-					if (response.ok) {
-						lastObservedVersion = response.state.stateVersion;
-						handledTurns.add(expectedVersion);
-					}
-					const terminalFromMove = resolveTerminalFromMove(
-						response,
-						me.agentId,
-						opponentId,
-					);
-					if (terminalFromMove) {
-						resolve({
-							...terminalFromMove,
-							matchId,
-							transport,
+					let expectedVersion = initialExpectedVersion;
+					let actionsApplied = 0;
+
+					while (actionsApplied < MAX_CONSECUTIVE_ACTIONS_PER_TURN) {
+						if (handledTurns.has(expectedVersion)) {
+							break;
+						}
+
+						const move = await resolveMove(expectedVersion);
+
+						const response = await client.submitMove(matchId, {
+							moveId: randomUUID(),
+							expectedVersion,
+							move,
 						});
+						if (response.ok) {
+							lastObservedVersion = response.state.stateVersion;
+							handledTurns.add(expectedVersion);
+						}
+
+						const terminalFromMove = resolveTerminalFromMove(
+							response,
+							me.agentId,
+							opponentId,
+						);
+						if (terminalFromMove) {
+							resolve({
+								...terminalFromMove,
+								matchId,
+								transport,
+							});
+							return;
+						}
+
+						if (!response.ok) {
+							break;
+						}
+
+						const nextVersion = response.state.stateVersion;
+						if (nextVersion <= expectedVersion) {
+							break;
+						}
+
+						const activeAgentId = getActiveAgentIdFromGame(response.state.game);
+						if (activeAgentId !== me.agentId) {
+							break;
+						}
+
+						expectedVersion = nextVersion;
+						actionsApplied += 1;
 					}
 				} catch (error) {
 					reject(error);
 				} finally {
-					inFlightTurns.delete(expectedVersion);
+					turnLoopInFlight = false;
 				}
 			};
 			void startSource(source);
